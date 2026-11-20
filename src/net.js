@@ -1,15 +1,24 @@
 // ---------------------------------------------------------------------------
 // Verbindung zum Nitro-Rivale-Server (WebSocket, JSON-Nachrichten)
 // ---------------------------------------------------------------------------
+// Fester Spielserver: wird genutzt, wenn die Spielseite woanders liegt als der Server
+// (z. B. auf nitro-rivale.pages.dev). Die Freunde sehen diese Adresse nicht.
+export const GAME_SERVER = 'wss://nitro-server.traumcode.cloud/ws';
+
+// Liefert die Serveradressen in der Reihenfolge, in der sie probiert werden
 export function defaultServerUrl(custom) {
   if (custom) {
     let u = custom.trim();
     if (!/^wss?:\/\//.test(u)) u = (u.startsWith('localhost') || /^\d/.test(u) ? 'ws://' : 'wss://') + u;
     if (!/\/ws$/.test(u)) u = u.replace(/\/$/, '') + '/ws';
-    return u;
+    return [u];
   }
-  if (typeof location === 'undefined' || !/^https?:$/.test(location.protocol) || !location.host) return null;
-  return (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
+  const list = [];
+  const web = typeof location !== 'undefined' && /^https?:$/.test(location.protocol) && location.host;
+  // Liegt die Seite auf unserem eigenen Server, läuft /ws gleich nebenan
+  if (web && !/\.pages\.dev$/.test(location.hostname)) list.push((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
+  if (GAME_SERVER && !list.includes(GAME_SERVER)) list.push(GAME_SERVER);
+  return list;
 }
 
 export class Net {
@@ -23,11 +32,20 @@ export class Net {
   }
   on(type, fn) { this.handlers.set(type, fn); return this; }
   emit(type, msg) { const h = this.handlers.get(type); if (h) h(msg); }
-  connect(url, timeout = 5000) {
+  async connect(urls, timeout = 5000) {
+    const list = (Array.isArray(urls) ? urls : [urls]).filter(Boolean);
+    if (!list.length) throw new Error('Keine Serveradresse');
+    let last;
+    for (const u of list) {
+      try { await this.connectOne(u, timeout); this.url = u; return this; } catch (err) { last = err; }
+    }
+    throw last;
+  }
+  connectOne(url, timeout) {
     return new Promise((resolve, reject) => {
       if (!url) { reject(new Error('Keine Serveradresse')); return; }
       let done = false;
-      const fail = (err) => { if (done) return; done = true; try { this.ws?.close(); } catch { /* */ } reject(err); };
+      const fail = (err) => { if (done) return; done = true; try { ws?.close(); } catch { /* */ } reject(err); };
       // Läuft der Haupt-Thread gerade voll (Shader kompilieren, Strecke laden), kommt das
       // "welcome" verspätet an – ist die Leitung schon offen, wird einmal verlängert.
       let tm = setTimeout(function check(extended) {
@@ -39,6 +57,7 @@ export class Net {
       try { ws = new WebSocket(url); } catch (err) { clearTimeout(tm); fail(err); return; }
       this.ws = ws;
       ws.onmessage = (e) => {
+        if (this.ws !== ws) return; // alte, verworfene Leitung
         let m;
         try { m = JSON.parse(e.data); } catch { return; }
         if (m.t === 'welcome') {
@@ -53,6 +72,7 @@ export class Net {
       };
       ws.onerror = () => fail(new Error('Server nicht erreichbar'));
       ws.onclose = () => {
+        if (this.ws !== ws) { if (!done) fail(new Error('Verbindung abgelehnt')); return; }
         clearInterval(this.pingT);
         const was = this.connected;
         this.connected = false;
