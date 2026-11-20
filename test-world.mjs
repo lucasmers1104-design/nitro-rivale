@@ -1,0 +1,34 @@
+import RAPIER from '@dimforge/rapier3d-compat';
+import * as THREE from 'three';
+globalThis.document = { createElement: () => ({ getContext: () => null, width: 0, height: 0 }) };
+const { buildWorld } = await import('./src/world.js');
+const { LEVEL_ORDER } = await import('./src/levels.js');
+await RAPIER.init();
+for (const id of LEVEL_ORDER) {
+  const world = new RAPIER.World({ x: 0, y: -13.2, z: 0 });
+  const g = { RAPIER, world, scene: new THREE.Scene(), gravity: 13.2, owners: new Map(), debris: [], envMap: null };
+  const t0 = performance.now();
+  const L = buildWorld(g, id);
+  const ms = performance.now() - t0;
+  const tr = L.track;
+  world.step();
+  let maxErr = 0, sumErr = 0, n = 0, maxRoad = 0;
+  const rnd = (a) => (Math.random() * 2 - 1) * a;
+  const hits = (x, z) => { let best = null; world.intersectionsWithRay(new RAPIER.Ray({ x, y: 200, z }, { x: 0, y: -1, z: 0 }), 400, true, (h) => { if (g.owners.get(h.collider.handle)?.type === 'ground') { best = 200 - h.timeOfImpact; } return true; }); return best; };
+  for (let k = 0; k < 3000; k++) {
+    const x = rnd(320), z = rnd(320);
+    const y = hits(x, z); if (y == null) continue;
+    const e = Math.abs(y - tr.heightAt(x, z)); maxErr = Math.max(maxErr, e); sumErr += e; n++;
+  }
+  for (let i = 0; i < tr.N; i += 7) {
+    for (const off of [-6, 0, 6]) {
+      const p = tr.pts[i].clone().addScaledVector(tr.side[i], off);
+      const y = hits(p.x, p.z); if (y == null) continue;
+      maxRoad = Math.max(maxRoad, Math.abs(y - tr.heightAt(p.x, p.z)));
+    }
+  }
+  let objs = 0; L.group.traverse(() => objs++);
+  const ys = tr.pts.map((p) => p.y);
+  console.log(`${id}: Bauzeit ${ms.toFixed(0)} ms, Objekte ${objs}, Kollider ${world.colliders.len()}, Höhe Straße ${Math.min(...ys).toFixed(1)}..${Math.max(...ys).toFixed(1)} m, Gelände-Abweichung max ${maxErr.toFixed(3)} / Ø ${(sumErr / n).toFixed(4)} m, auf der Straße max ${maxRoad.toFixed(3)} m`);
+  L.dispose(); world.free();
+}

@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nitro Rivale – Low-Poly Racing</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Lilita+One&family=Share+Tech+Mono&family=Barlow+Semi+Condensed:wght@500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --navy: #23264a; --navy2: #2f3360; --cream: #fff8ec; --cream2: #f6ecd9; --mut: #5d6288; --card: #e9ecf8;
+    --s: 1;
+    --font: 'Fredoka', 'Nunito', 'Arial Rounded MT Bold', 'Segoe UI', system-ui, sans-serif;
+    --disp: 'Lilita One', 'Fredoka', 'Arial Black', Impact, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0d0e12; color: var(--navy); font-family: var(--font); font-weight: 600; user-select: none; }
+  #stage { position: fixed; inset: 0; }
+  #stage canvas { display: block; }
+  .hidden { display: none !important; }
+  button { font-family: inherit; cursor: pointer; color: inherit; border: 0; background: none; padding: 0; }
+  svg { display: block; width: 100%; height: 100%; }
+
+  /* ---------- Skalierte Bühnen (Entwurf 1600 × 900) ---------- */
+  .screen { position: fixed; inset: 0; z-index: 10; }
+  .screen:not(.on) { display: none; }
+  .stage1600 { position: absolute; left: 50%; top: 50%; width: 1600px; height: 900px; transform: translate(-50%, -50%) scale(var(--s)); }
+  .corner { position: fixed; transform: scale(var(--s)); }
+  .tl { left: 18px; top: 18px; transform-origin: top left; }
+  .tr { right: 18px; top: 18px; transform-origin: top right; }
+  .bl { left: 18px; bottom: 18px; transform-origin: bottom left; }
+  .br { right: 18px; bottom: 18px; transform-origin: bottom right; }
+  .tc { left: 50%; top: 18px; transform: translateX(-50%) scale(var(--s)); transform-origin: top center; }
+  .bc { left: 50%; bottom: 10px; transform: translateX(-50%) scale(var(--s)); transform-origin: bottom center; }
+  .cc { left: 50%; top: 50%; transform: translate(-50%, -50%) scale(var(--s)); transform-origin: center; }
+
+  /* ---------- Text mit Kontur ---------- */
+  .out { color: #fff; -webkit-text-stroke: 7px var(--navy); paint-order: stroke fill; text-shadow: 0 4px 0 var(--navy); }
+  .out-s { color: #fff; -webkit-text-stroke: 5px var(--navy); paint-order: stroke fill; text-shadow: 0 3px 0 var(--navy); }
+
+  /* ---------- Knöpfe ---------- */
+  .btn { --c1: #8be06a; --c2: #4cb83e; --dk: #2f8a2a;
+    position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 14px;
+    border: 4px solid var(--navy); border-bottom-width: 9px; border-radius: 22px; padding: 10px 26px;
+    background: linear-gradient(180deg, var(--c1), var(--c2)); box-shadow: inset 0 -7px 0 var(--dk), 0 6px 14px rgba(15, 18, 45, 0.35);
+    color: #fff; font: 700 30px/1 var(--font); letter-spacing: 0.02em; text-transform: uppercase; white-space: nowrap;
+    -webkit-text-stroke: 6px var(--navy); paint-order: stroke fill; text-shadow: 0 3px 0 var(--navy);
+    transition: transform 0.09s ease, filter 0.12s ease; }
+  .btn::before { content: ''; position: absolute; left: 12px; right: 12px; top: 6px; height: 34%; border-radius: 999px; background: rgba(255, 255, 255, 0.38); pointer-events: none; }
+  .btn > * { position: relative; }
+  .btn:hover { transform: translateY(-3px) scale(1.02); filter: brightness(1.06); }
+  .btn:active { transform: translateY(3px); border-bottom-width: 5px; }
+  .btn .ic { width: 1.5em; height: 1.5em; flex: none; filter: drop-shadow(0 2px 0 rgba(0,0,0,.2)); }
+  .btn.pink { --c1: #ff93b4; --c2: #f0507e; --dk: #c2335f; }
+  .btn.orange { --c1: #ffc066; --c2: #f7861f; --dk: #c45f0c; }
+  .btn.purple { --c1: #b896ff; --c2: #7c52f0; --dk: #5733c0; }
+  .btn.blue { --c1: #7cc8ff; --c2: #2f86f0; --dk: #1e5fc0; }
+  .btn.red { --c1: #ff8f80; --c2: #ec4b3c; --dk: #b62c20; }
+  .btn.yellow { --c1: #ffe680; --c2: #ffbf2e; --dk: #d18c0c; }
+  .btn.white { --c1: #ffffff; --c2: #e9ecf8; --dk: #c7cde4; color: var(--navy); -webkit-text-stroke: 0; text-shadow: none; }
+  .btn.sm { font-size: 22px; border-radius: 16px; padding: 8px 16px; border-bottom-width: 7px; }
+  .btn.sq { width: 70px; height: 70px; padding: 0; border-radius: 18px; }
+  .btn.sq .ic { width: 34px; height: 34px; }
+  .btn[disabled] { filter: grayscale(0.8) brightness(0.9); pointer-events: none; }
+
+  /* ---------- Panels ---------- */
+  .panel { position: absolute; background: var(--cream); border: 5px solid var(--navy); border-radius: 34px; box-shadow: 0 10px 0 rgba(20, 22, 48, 0.4), 0 24px 60px rgba(0, 0, 0, 0.45); padding: 26px 32px; }
+  .phead { display: flex; align-items: center; gap: 18px; margin-bottom: 16px; }
+  .phead h2 { margin: 0; font: 400 52px/1 var(--disp); color: var(--navy); letter-spacing: 0.01em; }
+  .phead .sub { font-size: 21px; color: var(--mut); margin-top: 4px; font-weight: 600; }
+  .modal-bg { position: absolute; inset: 0; background: rgba(15, 20, 55, 0.35); }
+  .lbl { font-size: 16px; letter-spacing: 0.12em; color: var(--mut); font-weight: 700; text-transform: uppercase; }
+
+  /* Schalter-Reihen */
+  .opt { display: flex; align-items: center; justify-content: space-between; gap: 14px; background: #fff; border: 4px solid var(--navy); border-radius: 20px; padding: 8px 10px 8px 18px; font-size: 22px; }
+  .opt .name { font-weight: 700; }
+  .stepper { display: flex; align-items: center; gap: 8px; }
+  .stepper b { min-width: 56px; text-align: center; font: 400 34px/1 var(--disp); }
+  .stepper .btn { width: 46px; height: 46px; padding: 0; font-size: 28px; border-radius: 14px; border-bottom-width: 6px; }
+  .seg { display: flex; gap: 6px; }
+  .seg button { border: 3px solid var(--navy); border-radius: 14px; padding: 7px 14px; font-size: 18px; font-weight: 700; background: var(--card); color: var(--navy); }
+  .seg button.on { background: linear-gradient(#ffe680, #ffbf2e); box-shadow: inset 0 -4px 0 #d18c0c; }
+
+  /* ---------- Ladebildschirm ---------- */
+  #loading { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; background: radial-gradient(circle at 50% 40%, #3f7fe0, #1d3a8a 70%); }
+  #loading .box { text-align: center; transform: scale(var(--s)); }
+  #loading .logo1 { font-size: 104px; }
+  #loading .bar { width: 520px; height: 34px; margin: 26px auto 10px; border: 5px solid var(--navy); border-radius: 999px; background: #fff; overflow: hidden; }
+  #loading .bar i { display: block; height: 100%; width: 0%; background: linear-gradient(#8be06a, #4cb83e); border-radius: 999px; transition: width 0.25s; }
+  #loading .msg { font-size: 26px; color: #fff; }
+  .err { font-size: 22px; color: #fff; background: var(--navy); padding: 20px; border-radius: 20px; }
+
+  /* ---------- Logo ---------- */
+  .logo1 { position: relative; font: 400 104px/0.95 var(--disp); letter-spacing: 0.01em; display: inline-block; }
+  .logo1::before { content: attr(data-t); position: absolute; inset: 0; color: var(--navy); -webkit-text-stroke: 26px var(--navy); text-shadow: 0 10px 0 var(--navy), 0 18px 30px rgba(0,0,0,.35); z-index: 0; }
+  .logo1 span { position: relative; z-index: 1; background: linear-gradient(180deg, #fff3a0 0%, #ffcf3a 45%, #ff8a1e 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .logo2 { position: relative; font: 400 46px/1 var(--disp); color: #ffd23e; -webkit-text-stroke: 12px var(--navy); paint-order: stroke fill; text-shadow: 0 6px 0 var(--navy); }
+
+  /* ---------- Hauptmenü ---------- */
+  #menu .shade { position: absolute; inset: 0; background: linear-gradient(90deg, rgba(25, 50, 140, 0.62) 0%, rgba(25, 50, 140, 0.28) 42%, rgba(25, 50, 140, 0) 68%), linear-gradient(0deg, rgba(10, 20, 60, 0.35), transparent 30%); }
+  .iconbar { display: flex; gap: 6px; background: rgba(20, 22, 40, 0.72); border-radius: 18px; padding: 7px; }
+  .iconbar button { width: 46px; height: 46px; border-radius: 13px; padding: 9px; }
+  .iconbar button:hover { background: rgba(255,255,255,.15); }
+  .iconbar .home { background: #fff; padding: 8px; }
+  #menuLogo { position: absolute; left: 70px; top: 80px; transform: rotate(-3deg); transform-origin: left center; }
+  #menuLogo .logo2 { margin: 6px 0 0 16px; display: inline-block; }
+  #menuTag { position: absolute; left: 82px; top: 300px; font-size: 24px; width: 640px; line-height: 1.25; }
+  #mSingle { position: absolute; left: 70px; top: 384px; width: 640px; height: 128px; font-size: 58px; justify-content: flex-start; padding-left: 26px; border-radius: 28px; }
+  #mSingle .ring { flex: none; width: 104px; height: 104px; border-radius: 50%; background: #fff; border: 5px solid var(--navy); padding: 14px; margin-right: 10px; }
+  #mMulti { position: absolute; left: 70px; top: 530px; width: 312px; height: 104px; font-size: 31px; gap: 8px; padding: 0 14px; }
+  #mGarage { position: absolute; left: 398px; top: 530px; width: 312px; height: 104px; font-size: 36px; }
+  #mLab { position: absolute; left: 70px; top: 652px; width: 312px; height: 80px; font-size: 26px; gap: 8px; padding: 0 14px; }
+  #mHelp { position: absolute; left: 398px; top: 652px; width: 312px; height: 80px; font-size: 26px; }
+  .promo { position: absolute; top: 40px; width: 262px; height: 214px; border: 5px solid var(--navy); border-radius: 28px; padding: 14px 16px; box-shadow: 0 8px 0 rgba(20,22,48,.4); color: #fff; cursor: pointer; transition: transform .1s; }
+  .promo:hover { transform: translateY(-3px) rotate(-1deg); }
+  .promo.p1 { right: 340px; background: linear-gradient(160deg, #a77bff, #6a3fd6); }
+  .promo.p2 { right: 60px; background: linear-gradient(160deg, #6fdc5a, #2f9a3a); }
+  .promo .new { position: absolute; right: 16px; top: -18px; background: #ff4f5e; color: #fff; border: 4px solid var(--navy); border-radius: 14px; padding: 2px 10px; font-size: 20px; -webkit-text-stroke: 4px var(--navy); paint-order: stroke fill; transform: rotate(6deg); }
+  .promo .row { display: flex; gap: 10px; align-items: center; }
+  .promo .bub { width: 62px; height: 62px; flex: none; border-radius: 50%; background: #fff; border: 4px solid var(--navy); padding: 10px; }
+  .promo h4 { margin: 0; font: 400 27px/1.05 var(--disp); white-space: nowrap; color: #fff; -webkit-text-stroke: 6px var(--navy); paint-order: stroke fill; }
+  .promo h4 small { display: block; color: #ffd23e; font-size: 23px; }
+  .promo p { margin: 10px 0 0; font-size: 14px; letter-spacing: .04em; color: #fff; -webkit-text-stroke: 3px var(--navy); paint-order: stroke fill; }
+  .promo .btn { position: absolute; left: 14px; right: 14px; bottom: 14px; padding: 6px; font-size: 26px; border-radius: 18px; }
+  #driverCard { position: absolute; right: 60px; top: 300px; width: 520px; background: var(--cream); border: 5px solid var(--navy); border-radius: 30px; padding: 20px 22px; box-shadow: 0 8px 0 rgba(20,22,48,.4); }
+  #driverCard .tag { position: absolute; right: 18px; top: -20px; background: linear-gradient(#ffe680, #ffbf2e); border: 4px solid var(--navy); border-radius: 999px; padding: 4px 14px; font-size: 20px; }
+  #driverCard .row { display: flex; gap: 16px; align-items: center; }
+  .avatar { width: 108px; height: 108px; flex: none; border-radius: 50%; border: 5px solid var(--navy); background: radial-gradient(circle at 50% 35%, #ffffff, #dfe5f6); padding: 16px; color: #e8483a; }
+  #nameInput { width: 100%; font: 700 30px/1 var(--font); color: var(--navy); border: 4px solid var(--navy); border-radius: 16px; padding: 8px 14px; background: #fff; outline: none; }
+  #nameInput:focus { box-shadow: 0 0 0 4px #ffd23e; }
+  #driverCar { font-size: 22px; color: var(--mut); margin-top: 8px; }
+  #driverCard .btns { display: flex; gap: 12px; margin-top: 16px; }
+  #driverCard .btns .btn { flex: 1; font-size: 22px; }
+  #driverBest { margin-top: 12px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  #driverBest div { background: var(--card); border: 3px solid var(--navy); border-radius: 14px; padding: 6px 8px; font-size: 13px; color: var(--mut); text-align: center; }
+  #driverBest b { display: block; font: 400 20px/1.2 var(--disp); color: var(--navy); }
+  #version { position: absolute; left: 74px; bottom: 26px; font-size: 18px; color: rgba(255,255,255,.75); }
+
+  /* ---------- Einzelspieler / Mehrspieler-Panels ---------- */
+  #spPanel { left: 220px; top: 70px; width: 1160px; height: 760px; }
+  .tabs { display: flex; gap: 12px; margin-bottom: 18px; }
+  .tabs .btn { flex: 1; font-size: 26px; height: 70px; }
+  .tabs .btn:not(.on) { --c1: #ffffff; --c2: #e9ecf8; --dk: #c7cde4; color: var(--navy); -webkit-text-stroke: 0; text-shadow: none; }
+  .trackPick { display: flex; gap: 16px; align-items: stretch; }
+  .trackPick .btn.sq { align-self: center; }
+  .trackCard { flex: 1; display: flex; gap: 20px; border: 5px solid var(--navy); border-radius: 26px; padding: 14px; color: #fff; min-height: 236px; }
+  .trackCard canvas { width: 300px; height: 204px; border-radius: 18px; border: 4px solid var(--navy); background: rgba(255,255,255,.18); flex: none; }
+  .trackCard h3 { margin: 4px 0 2px; font: 400 46px/1 var(--disp); -webkit-text-stroke: 8px var(--navy); paint-order: stroke fill; }
+  .trackCard .sub { font-size: 22px; -webkit-text-stroke: 4px var(--navy); paint-order: stroke fill; }
+  .facts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+  .facts span { background: rgba(255,255,255,.92); color: var(--navy); border: 3px solid var(--navy); border-radius: 999px; padding: 4px 12px; font-size: 18px; }
+  .dots { display: inline-flex; gap: 4px; vertical-align: -2px; }
+  .dots i { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--navy); background: #fff; }
+  .dots i.on { background: #ff5f4a; }
+  .optGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 18px; }
+  .pfoot { position: absolute; left: 32px; right: 32px; bottom: 26px; display: flex; gap: 16px; align-items: center; }
+  .pfoot .grow { flex: 1; }
+  .pfoot .btn.go { height: 92px; font-size: 52px; padding: 0 56px; }
+  .pfoot .btn.back2 { height: 76px; font-size: 32px; }
+  .carRow { display: flex; align-items: center; gap: 12px; }
+  .carRow .avatar { width: 66px; height: 66px; padding: 9px; border-width: 4px; }
+  .carRow b { font-size: 24px; display: block; }
+  .carRow small { font-size: 16px; color: var(--mut); }
+  .modeInfo { margin-top: 18px; background: #fff; border: 4px solid var(--navy); border-radius: 22px; padding: 16px 20px; font-size: 21px; color: var(--mut); }
+
+  #mpPanel { left: 380px; top: 130px; width: 840px; height: 650px; }
+  .nameRow { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+  .nameRow input { flex: 1; font: 700 26px/1 var(--font); color: var(--navy); border: 4px solid var(--navy); border-radius: 16px; padding: 8px 14px; outline: none; }
+  .codeBox { display: flex; justify-content: center; gap: 14px; background: #fff; border: 5px solid var(--navy); border-radius: 28px; padding: 28px; }
+  .codeBox input { width: 84px; height: 100px; text-align: center; font: 400 64px/1 var(--disp); color: var(--navy); border: 0; border-radius: 18px; background: var(--card); outline: none; text-transform: uppercase; caret-color: transparent; }
+  .codeBox input:focus { box-shadow: inset 0 0 0 4px #7c52f0; background: #f4efff; }
+  .codeBox input.filled { background: #fff3c8; }
+  .codeBox.shake { animation: shake 0.35s; }
+  @keyframes shake { 20% { transform: translateX(-10px); } 40% { transform: translateX(9px); } 60% { transform: translateX(-6px); } 80% { transform: translateX(4px); } }
+  .codeMsg { text-align: center; color: #e8483a; font-size: 24px; font-weight: 700; margin-top: 16px; min-height: 30px; }
+  .codeMsg.ok { color: #2f8a2a; }
+  .codeHelp { text-align: center; color: var(--mut); font-size: 20px; margin-top: 4px; }
+  .spin { display: inline-block; width: 26px; height: 26px; border: 5px solid #c9cfe6; border-top-color: #7c52f0; border-radius: 50%; animation: rot 0.8s linear infinite; vertical-align: -5px; margin-right: 8px; }
+  @keyframes rot { to { transform: rotate(360deg); } }
+  #mpPanel .pfoot .btn { height: 96px; font-size: 34px; flex: 1; }
+
+  /* Lobby */
+  #lobbyPanel { left: 150px; top: 60px; width: 1300px; height: 780px; }
+  .codeBadge { position: absolute; right: 30px; top: 22px; width: 280px; background: linear-gradient(#ffe680, #ffbf2e); border: 5px solid var(--navy); border-radius: 22px; padding: 10px 14px; text-align: center; cursor: pointer; }
+  .codeBadge .lbl { color: var(--navy); font-size: 15px; }
+  .codeBadge b { display: block; font: 400 50px/1 var(--disp); letter-spacing: 0.14em; color: var(--navy); }
+  .codeBadge small { display: none; }
+  .slots { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 18px; }
+  .slot { position: relative; height: 188px; border: 4px solid var(--navy); border-radius: 24px; background: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; padding: 10px; text-align: center; }
+  .slot.empty { background: var(--card); color: #a9b1cf; cursor: pointer; border-color: #c7cde4; }
+  .slot.empty:hover { border-color: var(--navy); color: var(--mut); }
+  .slot.empty .plus { width: 54px; height: 54px; }
+  .slot > * { flex: none; }
+  .slot .avatar { width: 76px; height: 76px; padding: 11px; }
+  .slot .nm { font-size: 22px; font-weight: 700; color: var(--navy); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .slot .cr { font-size: 15px; color: var(--mut); }
+  .slot .host { background: linear-gradient(#ffe680, #ffbf2e); border: 3px solid var(--navy); border-radius: 999px; padding: 3px 12px; font-size: 16px; color: var(--navy); display: flex; gap: 5px; align-items: center; }
+  .slot .host i { width: 20px; height: 20px; display: block; }
+  .slot .bot { background: var(--card); border: 3px solid var(--navy); border-radius: 999px; padding: 3px 12px; font-size: 16px; }
+  .slot .x { position: absolute; right: 8px; top: 8px; width: 34px; height: 34px; border-radius: 10px; background: #ffe0dc; border: 3px solid var(--navy); font-size: 18px; line-height: 1; color: var(--navy); }
+  .lobbyRow { display: flex; gap: 12px; align-items: center; margin-top: 16px; }
+  .lobbyRow .pill { flex: 1; height: 70px; background: #fff; border: 4px solid var(--navy); border-radius: 20px; display: flex; align-items: center; justify-content: center; gap: 10px; font-size: 26px; font-weight: 700; }
+  .lobbyHint { text-align: center; color: var(--mut); font-size: 19px; margin-top: 10px; }
+  #lobbyPanel .pfoot .btn { height: 88px; font-size: 38px; flex: 1; }
+  #lobbyPanel .pfoot .btn.go { flex: 1.1; }
+  .lobbySettings { position: absolute; right: 30px; top: 150px; width: 440px; z-index: 3; padding: 20px; }
+  .lobbySettings .opt { margin-bottom: 10px; font-size: 20px; }
+
+  /* Info-Panels */
+  #infoPanel { left: 250px; top: 90px; width: 1100px; min-height: 400px; }
+  .itemGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .itemGrid div { display: flex; gap: 14px; align-items: center; background: #fff; border: 4px solid var(--navy); border-radius: 20px; padding: 10px 14px; }
+  .itemGrid i { width: 64px; height: 64px; flex: none; display: block; }
+  .itemGrid b { font-size: 24px; display: block; }
+  .itemGrid span { font-size: 17px; color: var(--mut); }
+  .keysGrid { display: grid; grid-template-columns: 250px 1fr; gap: 10px 16px; font-size: 21px; align-items: center; }
+  kbd { display: inline-block; font: 700 18px/1 var(--font); background: #fff; color: var(--navy); border: 3px solid var(--navy); border-bottom-width: 6px; border-radius: 10px; padding: 5px 10px; margin-right: 4px; }
+  .trackList { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .trackList .trackCard { min-height: 0; padding: 10px; gap: 12px; cursor: pointer; }
+  .trackList .trackCard canvas { width: 180px; height: 122px; }
+  .trackList h3 { font-size: 32px; }
+  .trackList .sub { font-size: 17px; }
+
+  #setPanel { left: 400px; top: 130px; width: 800px; min-height: 0; }
+  #setServer { width: 340px; font: 700 20px/1 var(--font); color: var(--navy); border: 3px solid var(--navy); border-radius: 12px; padding: 8px 12px; outline: none; }
+  .slot.mine { cursor: pointer; }
+  .slot.mine:hover { box-shadow: 0 0 0 4px #ffd23e; }
+  #setPanel .opt { margin-bottom: 12px; }
+  input[type=range] { -webkit-appearance: none; appearance: none; width: 300px; height: 18px; border-radius: 999px; background: var(--card); border: 3px solid var(--navy); outline: none; }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 34px; height: 34px; border-radius: 50%; background: linear-gradient(#8be06a, #4cb83e); border: 4px solid var(--navy); cursor: pointer; }
+
+  /* ---------- Garage ---------- */
+  #garage .gtitle { display: flex; gap: 16px; align-items: center; }
+  #garage .gtitle h2 { margin: 0; font: 400 58px/1 var(--disp); color: #fff; -webkit-text-stroke: 10px var(--navy); paint-order: stroke fill; text-shadow: 0 5px 0 var(--navy); }
+  #carCard { position: absolute; left: 60px; top: 150px; width: 470px; padding: 22px 24px; }
+  #carName { font: 400 48px/1 var(--disp); }
+  #carTag { font-size: 20px; color: var(--mut); margin: 4px 0 14px; }
+  .stat { display: grid; grid-template-columns: 150px 1fr; align-items: center; gap: 10px; margin: 8px 0; font-size: 19px; }
+  .stat i { height: 20px; border-radius: 999px; background: var(--card); border: 3px solid var(--navy); overflow: hidden; }
+  .stat b { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, #8be06a, #ffbf2e, #ff6a3a); }
+  #colors { display: flex; gap: 10px; margin: 16px 0 6px; flex-wrap: wrap; }
+  .swatch { width: 46px; height: 46px; border-radius: 50%; border: 4px solid var(--navy); box-shadow: inset 0 -5px 0 rgba(0,0,0,.2), inset 0 4px 0 rgba(255,255,255,.35); }
+  .swatch.active { outline: 4px solid #ffd23e; outline-offset: 2px; transform: scale(1.1); }
+  .soundrow { display: flex; gap: 10px; align-items: center; margin-top: 14px; }
+  #soundSel { flex: 1; font: 700 18px var(--font); color: var(--navy); border: 4px solid var(--navy); border-radius: 14px; padding: 8px; background: #fff; }
+  #garage .arrowL, #garage .arrowR { position: absolute; top: 400px; width: 96px; height: 96px; border-radius: 50%; }
+  #garage .arrowL { left: 600px; }
+  #garage .arrowR { right: 120px; }
+  #garage .arrowL .ic, #garage .arrowR .ic { width: 44px; height: 44px; }
+  #carIdx { position: absolute; left: 50%; top: 40px; transform: translateX(-50%); }
+  .pillN { background: rgba(20,22,40,.72); color: #fff; border-radius: 999px; padding: 8px 20px; font-size: 22px; }
+  #garageGo { position: absolute; right: 120px; bottom: 60px; height: 96px; font-size: 46px; padding: 0 50px; }
+
+  /* ---------- HUD ---------- */
+  #hud { z-index: 5; pointer-events: none; }
+  #hud .btn, #hud button { pointer-events: auto; }
+  #posBox { display: flex; align-items: flex-end; gap: 6px; }
+  #posBig { font: 400 110px/0.85 var(--disp); }
+  #posOf { font: 400 44px/1 var(--disp); margin-bottom: 10px; }
+  #lapPill { display: inline-block; margin-top: 10px; background: var(--cream); border: 4px solid var(--navy); border-radius: 999px; padding: 6px 18px; font: 400 30px/1 var(--disp); }
+  #timeCard { margin-top: 10px; background: rgba(255, 248, 236, 0.94); border: 4px solid var(--navy); border-radius: 20px; padding: 8px 14px; min-width: 250px; }
+  #timeCard .r { display: flex; justify-content: space-between; gap: 16px; font-size: 17px; color: var(--mut); }
+  #timeCard .r b { color: var(--navy); font: 400 22px/1.25 var(--disp); font-variant-numeric: tabular-nums; }
+  #timeCard .main b { font-size: 32px; }
+  #standings { margin-top: 12px; display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
+  #standings div { display: flex; align-items: center; gap: 8px; width: 250px; background: rgba(20, 22, 40, 0.7); color: #fff; border-radius: 12px; padding: 4px 10px 4px 6px; font-size: 17px; transition: transform .2s; }
+  #standings div.me { background: linear-gradient(#ffe680, #ffbf2e); color: var(--navy); border: 3px solid var(--navy); }
+  #standings div em { font-style: normal; font: 400 20px/1 var(--disp); width: 24px; text-align: center; }
+  #standings div i { width: 14px; height: 14px; border-radius: 50%; border: 2px solid #fff; flex: none; }
+  #standings div span { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  #standings div small { font-size: 14px; opacity: .85; font-variant-numeric: tabular-nums; }
+  #itemSlot { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  #itemBox { width: 112px; height: 112px; border-radius: 26px; background: var(--cream); border: 5px solid var(--navy); box-shadow: 0 6px 0 rgba(20,22,48,.45); padding: 14px; position: relative; }
+  #itemBox.empty { background: rgba(255, 248, 236, 0.45); }
+  #itemBox.rolling { animation: wob 0.12s infinite alternate; }
+  #itemBox.ready { animation: pop 0.35s; }
+  @keyframes wob { from { transform: rotate(-4deg); } to { transform: rotate(4deg); } }
+  @keyframes pop { 0% { transform: scale(1.35); } 100% { transform: scale(1); } }
+  #itemKey { position: absolute; right: -14px; bottom: -14px; }
+  #itemName { font-size: 22px; }
+  #minimap { width: 250px; height: 250px; border-radius: 28px; border: 5px solid var(--navy); background: rgba(255, 248, 236, 0.86); box-shadow: 0 6px 0 rgba(20,22,48,.45); display: block; }
+  #dmgWrap { background: rgba(24, 26, 48, 0.84); border: 4px solid var(--navy); border-radius: 22px; padding: 10px 12px 8px; }
+  #dmgWrap .lbl { font-size: 13px; color: #ffd23e; }
+  #dmg { width: 230px; height: 318px; display: block; }
+  #cluster { display: block; transform: scale(0.84); transform-origin: bottom center; }
+  #hudKeys { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; max-width: 520px; }
+  #hudKeys span { background: rgba(20,22,40,.72); color: #fff; border-radius: 12px; padding: 6px 10px; font-size: 16px; }
+  #hudKeys kbd { font-size: 14px; padding: 3px 7px; border-bottom-width: 4px; }
+  #lights { display: flex; flex-direction: column; align-items: center; gap: 18px; }
+  #lights .house { display: flex; gap: 20px; background: var(--navy); border: 5px solid #11132a; border-radius: 34px; padding: 18px 26px; box-shadow: 0 10px 0 rgba(0,0,0,.35); }
+  #lights .lamp { width: 92px; height: 92px; border-radius: 50%; background: #3a1414; border: 5px solid #11132a; box-shadow: inset 0 -8px 0 rgba(0,0,0,.4); transition: background 0.08s; }
+  #lights .lamp.red { background: radial-gradient(circle at 40% 35%, #ffb0a0, #ff2a1a 55%, #b0100a); box-shadow: 0 0 40px #ff2a1a, inset 0 -8px 0 rgba(0,0,0,.25); }
+  #lights .lamp.green { background: radial-gradient(circle at 40% 35%, #d8ffb0, #39e03a 55%, #188a1a); box-shadow: 0 0 46px #39e03a, inset 0 -8px 0 rgba(0,0,0,.25); }
+  #lightsTxt { font: 400 120px/1 var(--disp); }
+  #bigMsg { font: 400 92px/1 var(--disp); text-align: center; white-space: nowrap; transition: opacity 0.25s, transform 0.25s; }
+  #bigMsg.off { opacity: 0; transform: scale(0.8); }
+  #bigMsg.bad { color: #ff5a4a; }
+  #bigMsg small { display: block; font-size: 40px; margin-top: 6px; }
+  #hint { background: var(--cream); border: 4px solid var(--navy); border-radius: 18px; padding: 10px 16px; font-size: 22px; opacity: 0; transition: opacity 0.3s; }
+  #hint.show { opacity: 1; }
+  #toasts { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .toast { background: var(--cream); border: 4px solid var(--navy); border-radius: 999px; padding: 8px 22px; font-size: 22px; box-shadow: 0 5px 0 rgba(20,22,48,.4); animation: tin 0.25s; transition: opacity 0.4s, transform 0.4s; }
+  .toast.gold { background: linear-gradient(#ffe680, #ffbf2e); }
+  .toast.bad { background: #ffd9d3; }
+  .toast.good { background: #d8f7cf; }
+  .toast.out { opacity: 0; transform: translateY(-14px); }
+  @keyframes tin { from { opacity: 0; transform: translateY(14px) scale(0.9); } }
+  #drift { text-align: center; opacity: 0; transform: scale(0.8); transition: opacity 0.2s, transform 0.2s; }
+  #drift.on { opacity: 1; transform: scale(1); }
+  #drift .t { font: 400 34px/1 var(--disp); color: #ffd23e; -webkit-text-stroke: 7px var(--navy); paint-order: stroke fill; }
+  #driftScore { font: 400 64px/1 var(--disp); }
+  #drift .m { font-size: 24px; }
+  #freeInfo { margin-top: 10px; background: rgba(20,22,40,.7); color: #fff; border-radius: 14px; padding: 6px 12px; font-size: 17px; }
+
+  /* ---------- Pause / Ergebnis ---------- */
+  #pausePanel { left: 560px; top: 170px; width: 480px; height: 560px; display: flex; flex-direction: column; gap: 16px; align-items: stretch; padding-top: 30px; }
+  #pausePanel h2 { text-align: center; margin: 0 0 6px; font: 400 64px/1 var(--disp); }
+  #pausePanel .btn { height: 84px; font-size: 34px; }
+  #resPanel { left: 260px; top: 70px; width: 1080px; height: 760px; }
+  #resHead { display: flex; align-items: center; gap: 22px; margin-bottom: 16px; }
+  #resPlace { font: 400 140px/0.85 var(--disp); }
+  #resHead h2 { margin: 0; font: 400 56px/1 var(--disp); }
+  #resHead .sub { font-size: 22px; color: var(--mut); }
+  #resHead .trophy { width: 120px; height: 120px; }
+  .resTable { display: flex; flex-direction: column; gap: 6px; }
+  .resTable div { display: grid; grid-template-columns: 70px 1fr 220px 160px 150px; align-items: center; gap: 10px; background: #fff; border: 4px solid var(--navy); border-radius: 18px; padding: 6px 14px; font-size: 21px; }
+  .resTable div.me { background: linear-gradient(#ffe680, #ffbf2e); }
+  .resTable div.h { background: none; border: 0; padding: 0 18px; font-size: 15px; color: var(--mut); letter-spacing: .1em; text-transform: uppercase; }
+  .resTable em { font: 400 32px/1 var(--disp); font-style: normal; text-align: center; }
+  .resTable .nm { display: flex; gap: 10px; align-items: center; font-weight: 700; }
+  .resTable .nm i { width: 18px; height: 18px; border-radius: 50%; border: 3px solid var(--navy); flex: none; }
+  .resTable .t { font-variant-numeric: tabular-nums; }
+  #resPanel .pfoot .btn { height: 88px; font-size: 34px; flex: 1; }
+
+  /* ---------- Crash-Labor ---------- */
+  #labPanel { z-index: 6; width: 400px; background: var(--cream); border: 5px solid var(--navy); border-radius: 28px; padding: 18px 20px; box-shadow: 0 8px 0 rgba(20,22,48,.4); }
+  #labPanel h2 { margin: 0; font: 400 40px/1 var(--disp); }
+  #labPanel .sub { font-size: 15px; color: var(--mut); margin: 4px 0 8px; }
+  #labPanel h4 { margin: 12px 0 6px; font-size: 14px; letter-spacing: .12em; color: var(--mut); text-transform: uppercase; }
+  .zones { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .zones button, #labPanel .seg button { border: 3px solid var(--navy); border-radius: 12px; padding: 7px 4px; font-size: 15px; font-weight: 700; background: #fff; }
+  .zones button.active, #labPanel .seg button.active { background: linear-gradient(#ffe680, #ffbf2e); box-shadow: inset 0 -4px 0 #d18c0c; }
+  #labPanel .seg { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .sp { display: flex; justify-content: space-between; font-size: 15px; color: var(--mut); }
+  .sp b { color: var(--navy); font-size: 20px; }
+  #labPanel input[type=range] { width: 100%; }
+  #crashBtn { width: 100%; margin-top: 12px; height: 76px; font-size: 38px; }
+  .tools { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+  .tools .btn { font-size: 17px; padding: 8px 6px; border-radius: 14px; border-bottom-width: 6px; }
+  .tools .btn.on { --c1: #ffe680; --c2: #ffbf2e; --dk: #d18c0c; }
+  .read { display: grid; grid-template-columns: 130px 1fr; gap: 4px 10px; font-size: 15px; }
+  .read span:nth-child(odd) { color: var(--mut); }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+
+<div id="loading"><div class="box"><div class="logo1" data-t="NITRO RIVALE"><span>NITRO RIVALE</span></div><div class="bar"><i id="loadBar"></i></div><div class="msg out-s" id="loadMsg">Motoren werden warmgefahren …</div></div></div>
+
+<!-- ======================= Hauptmenü ======================= -->
+<div id="menu" class="screen">
+  <div class="shade"></div>
+  <div class="corner tl iconbar">
+    <button class="home" data-ic="flag" title="Nitro Rivale"></button>
+    <button id="ibSettings" data-ic="gear" title="Einstellungen"></button>
+    <button id="ibSound" data-ic="sound" title="Ton an/aus (M)"></button>
+    <button id="ibFull" data-ic="full" title="Vollbild"></button>
+    <button id="ibHelp" data-ic="help" title="Steuerung"></button>
+  </div>
+  <div class="stage1600">
+    <div id="menuLogo"><div class="logo1" data-t="NITRO RIVALE"><span>NITRO RIVALE</span></div><br><div class="logo2">RASEN · CRASHEN · GEWINNEN</div></div>
+    <div id="menuTag" class="out-s">Bis zu 8 Fahrer, 4 Strecken, 8 Power-ups – und jede Menge Blech, das fliegt!</div>
+    <button class="btn" id="mSingle"><span class="ring" data-ic="flag"></span><span>EINZELSPIELER</span></button>
+    <button class="btn pink" id="mMulti"><span class="ic" data-ic="people"></span><span>MEHRSPIELER</span></button>
+    <button class="btn orange" id="mGarage"><span class="ic" data-ic="garage"></span><span>GARAGE</span></button>
+    <button class="btn purple" id="mLab"><span class="ic" data-ic="lab"></span><span>CRASH-LABOR</span></button>
+    <button class="btn blue" id="mHelp"><span class="ic" data-ic="help"></span><span>STEUERUNG</span></button>
+    <div class="promo p1" id="promoTracks"><div class="new">NEU!</div><div class="row"><div class="bub" data-ic="flag"></div><h4>4 STRECKEN<small>Tal bis Pass</small></h4></div><p>WÜSTE · SCHNEE · KÜSTE</p><button class="btn yellow"><span>ANSEHEN ▶</span></button></div>
+    <div class="promo p2" id="promoItems"><div class="new">NEU!</div><div class="row"><div class="bub" data-ic="rocket" data-set="item"></div><h4>8 POWER-UPS<small>Kisten!</small></h4></div><p>NITRO · RAKETE · SPRUNG</p><button class="btn yellow"><span>ANSEHEN ▶</span></button></div>
+    <div id="driverCard">
+      <div class="tag">DEIN FAHRER</div>
+      <div class="row">
+        <div class="avatar" id="driverAvatar" data-ic="car"></div>
+        <div style="flex:1">
+          <input id="nameInput" maxlength="16" spellcheck="false" aria-label="Dein Name">
+          <div id="driverCar">Brutus V8 · Feuerrot</div>
+        </div>
+      </div>
+      <div id="driverBest"></div>
+      <div class="btns"><button class="btn orange sm" id="dGarage"><span>GARAGE</span></button><button class="btn blue sm" id="dSettings"><span>EINSTELLUNGEN</span></button></div>
+    </div>
+    <div id="version">Nitro Rivale · v6 · Online-Mehrspieler</div>
+  </div>
+</div>
+
+<!-- ======================= Einzelspieler ======================= -->
+<div id="sp" class="screen">
+  <div class="modal-bg"></div>
+  <div class="stage1600">
+    <div class="panel" id="spPanel">
+      <div class="phead"><button class="btn white sq" id="spBack"><span class="ic" data-ic="back"></span></button><div><h2>EINZELSPIELER</h2><div class="sub">Gegen Bots rasen, frei fahren oder Blech verbiegen</div></div></div>
+      <div class="tabs">
+        <button class="btn on" data-spmode="race"><span>RENNEN</span></button>
+        <button class="btn blue" data-spmode="free"><span>FREIES FAHREN</span></button>
+        <button class="btn red" data-spmode="arena"><span>CRASH-ARENA</span></button>
+      </div>
+      <div class="trackPick">
+        <button class="btn white sq" id="trPrev"><span class="ic" data-ic="left"></span></button>
+        <div class="trackCard" id="trCard"><canvas id="trCanvas" width="600" height="408"></canvas><div><h3 id="trName">Grünes Tal</h3><div class="sub" id="trSub"></div><div class="facts" id="trFacts"></div></div></div>
+        <button class="btn white sq" id="trNext"><span class="ic" data-ic="right"></span></button>
+      </div>
+      <div class="optGrid" id="spOpts">
+        <div class="opt"><span class="name">Runden</span><div class="stepper"><button class="btn white" data-step="laps" data-d="-1">−</button><b id="vLaps">3</b><button class="btn white" data-step="laps" data-d="1">+</button></div></div>
+        <div class="opt"><span class="name">Gegner</span><div class="stepper"><button class="btn white" data-step="bots" data-d="-1">−</button><b id="vBots">5</b><button class="btn white" data-step="bots" data-d="1">+</button></div></div>
+        <div class="opt"><span class="name">Bot-Stärke</span><div class="seg" id="segSkill"><button data-v="leicht">Leicht</button><button data-v="normal">Normal</button><button data-v="profi">Profi</button></div></div>
+        <div class="opt"><span class="name">Power-ups</span><div class="seg" id="segItems"><button data-v="1">An</button><button data-v="0">Aus</button></div></div>
+      </div>
+      <div class="modeInfo hidden" id="spInfo"></div>
+      <div class="pfoot">
+        <div class="carRow"><div class="avatar" id="spAvatar" data-ic="car"></div><div><b id="spCar">Brutus V8</b><small>Dein Auto</small></div><button class="btn orange sm" id="spGarage"><span>ÄNDERN</span></button></div>
+        <div class="grow"></div>
+        <button class="btn go" id="spStart"><span>START</span></button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= Mehrspieler: Code ======================= -->
+<div id="mp" class="screen">
+  <div class="modal-bg"></div>
+  <div class="stage1600">
+    <div class="panel" id="mpPanel">
+      <div class="phead"><button class="btn white sq" id="mpBack"><span class="ic" data-ic="back"></span></button><div><h2>MEHRSPIELER</h2><div class="sub">Eigenen Raum starten oder mit Code beitreten</div></div></div>
+      <div class="nameRow"><span class="lbl">Dein Name</span><input id="mpName" maxlength="16" spellcheck="false"></div>
+      <div class="codeBox" id="codeBox"></div>
+      <div class="codeMsg" id="codeMsg"></div>
+      <div class="codeHelp">Codes bestehen aus 5 Buchstaben und Zahlen, wie K7QXM.</div>
+      <div class="pfoot">
+        <button class="btn pink" id="mpCreate"><span class="ic" data-ic="party"></span><span>NEUER RAUM</span></button>
+        <button class="btn purple" id="mpJoin"><span class="ic" data-ic="key"></span><span>BEITRETEN</span></button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= Mehrspieler: Lobby ======================= -->
+<div id="lobby" class="screen">
+  <div class="modal-bg"></div>
+  <div class="stage1600">
+    <div class="panel" id="lobbyPanel">
+      <div class="phead"><button class="btn white sq" id="lbBack"><span class="ic" data-ic="back"></span></button><div><h2>DEIN RAUM</h2><div class="sub" id="lbSub">1/8 Fahrer · Freunde treten mit dem Code bei</div></div></div>
+      <div class="codeBadge" id="codeBadge"><div class="lbl">Raum-Code</div><b id="roomCode">5CD9U</b><small>Klicken zum Kopieren</small></div>
+      <div class="slots" id="slots"></div>
+      <div class="lobbyRow">
+        <button class="btn" id="lbMode" style="height:70px;font-size:26px"><span class="ic" data-ic="flag"></span><span id="lbModeTxt">RENNEN</span></button>
+        <button class="btn white sq" id="lbPrev"><span class="ic" data-ic="left"></span></button>
+        <div class="pill" id="lbTrack">Grünes Tal</div>
+        <button class="btn white sq" id="lbNext"><span class="ic" data-ic="right"></span></button>
+        <button class="btn purple" id="lbCustom" style="height:70px;font-size:26px"><span class="ic" data-ic="gear"></span><span>ANPASSEN</span></button>
+      </div>
+      <div class="lobbyHint">Tippe auf ein leeres Feld, um einen Bot hinzuzufügen – oder drücke START!</div>
+      <div class="panel lobbySettings hidden" id="lbSettings">
+        <div class="opt"><span class="name">Runden</span><div class="stepper"><button class="btn white" data-step="laps" data-d="-1">−</button><b class="vLaps">3</b><button class="btn white" data-step="laps" data-d="1">+</button></div></div>
+        <div class="opt"><span class="name">Bot-Stärke</span><div class="seg" id="segSkill2"><button data-v="leicht">Leicht</button><button data-v="normal">Normal</button><button data-v="profi">Profi</button></div></div>
+        <div class="opt"><span class="name">Power-ups</span><div class="seg" id="segItems2"><button data-v="1">An</button><button data-v="0">Aus</button></div></div>
+        <div class="opt"><span class="name">Freie Plätze mit Bots füllen</span><div class="seg" id="segFill"><button data-v="1">Ja</button><button data-v="0">Nein</button></div></div>
+        <button class="btn sm" id="lbSetOk" style="width:100%;margin-top:6px"><span>FERTIG</span></button>
+      </div>
+      <div class="pfoot">
+        <button class="btn red" id="lbLeave"><span>VERLASSEN</span></button>
+        <button class="btn blue" id="lbInvite"><span class="ic" data-ic="copy"></span><span>EINLADEN</span></button>
+        <button class="btn go" id="lbStart"><span>START</span></button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= Info (Strecken, Power-ups, Steuerung) ======================= -->
+<div id="info" class="screen">
+  <div class="modal-bg"></div>
+  <div class="stage1600">
+    <div class="panel" id="infoPanel">
+      <div class="phead"><button class="btn white sq" id="infoBack"><span class="ic" data-ic="back"></span></button><div><h2 id="infoTitle">POWER-UPS</h2><div class="sub" id="infoSub"></div></div></div>
+      <div id="infoBody"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= Einstellungen ======================= -->
+<div id="settings" class="screen">
+  <div class="modal-bg"></div>
+  <div class="stage1600">
+    <div class="panel" id="setPanel">
+      <div class="phead"><button class="btn white sq" id="setBack"><span class="ic" data-ic="back"></span></button><div><h2>EINSTELLUNGEN</h2><div class="sub">Werden in diesem Browser gespeichert</div></div></div>
+      <div class="opt"><span class="name">Lautstärke</span><input type="range" id="setVol" min="0" max="100" value="85"></div>
+      <div class="opt"><span class="name">Grafik</span><div class="seg" id="segGfx"><button data-v="hoch">Hoch</button><button data-v="mittel">Mittel</button><button data-v="niedrig">Niedrig</button></div></div>
+      <div class="opt"><span class="name">Kamera</span><div class="seg" id="segCam"><button data-v="0">Nah</button><button data-v="1">Weit</button><button data-v="2">Cockpit</button></div></div>
+      <div class="opt"><span class="name">Kamera wackelt bei Tempo</span><div class="seg" id="segShake"><button data-v="1">An</button><button data-v="0">Aus</button></div></div>
+      <div class="opt"><span class="name">Tasten-Hinweise im Rennen</span><div class="seg" id="segKeys"><button data-v="1">An</button><button data-v="0">Aus</button></div></div>
+      <div class="opt"><span class="name">Spielserver</span><input id="setServer" placeholder="automatisch (diese Seite)" spellcheck="false"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= Garage ======================= -->
+<div id="garage" class="screen">
+  <div class="corner tl gtitle"><button class="btn white sq" id="gBack"><span class="ic" data-ic="back"></span></button><h2>GARAGE</h2></div>
+  <div class="stage1600">
+    <div class="pillN" id="carIdx">1 / 3</div>
+    <div class="panel" id="carCard">
+      <div id="carName">Brutus V8</div>
+      <div id="carTag"></div>
+      <div id="carStats"></div>
+      <div class="lbl" style="margin-top:14px">Lackierung</div>
+      <div id="colors"></div>
+      <div class="lbl" style="margin-top:14px">Motorsound</div>
+      <div class="soundrow"><select id="soundSel" aria-label="Motorsound"></select><button class="btn blue sm" id="previewBtn"><span class="ic" data-ic="play"></span></button></div>
+    </div>
+    <button class="btn white arrowL" id="prevCar" aria-label="Vorheriges Auto"><span class="ic" data-ic="left"></span></button>
+    <button class="btn white arrowR" id="nextCar" aria-label="Nächstes Auto"><span class="ic" data-ic="right"></span></button>
+    <button class="btn" id="garageGo"><span>AUSWÄHLEN</span></button>
+  </div>
+</div>
+
+<!-- ======================= HUD ======================= -->
+<div id="hud" class="screen">
+  <div class="corner tl" id="hudTL">
+    <div id="raceBox">
+      <div id="posBox"><div id="posBig" class="out">1.</div><div id="posOf" class="out-s">/ 6</div></div>
+      <div id="lapPill">RUNDE 1/3</div>
+    </div>
+    <div id="timeCard">
+      <div class="r main"><span>Zeit</span><b id="tNow">0:00.00</b></div>
+      <div class="r"><span>Letzte</span><b id="tLast">–</b></div>
+      <div class="r"><span>Beste</span><b id="tBest">–</b></div>
+    </div>
+    <div id="freeInfo" class="hidden">Driftpunkte gesamt: <b id="driftTotal">0</b></div>
+  </div>
+  <div class="corner tc" id="itemSlot">
+    <div id="itemBox" class="empty"><div id="itemIcon"></div><div id="itemKey"><kbd>E</kbd></div></div>
+    <div id="itemName" class="out-s"></div>
+  </div>
+  <div class="corner tr"><canvas id="minimap" width="500" height="500"></canvas><div id="standings"></div></div>
+  <div class="corner bl" id="dmgWrap"><div class="lbl">Schaden</div><canvas id="dmg"></canvas></div>
+  <div class="corner bc"><canvas id="cluster"></canvas></div>
+  <div class="corner br" id="hudKeys"><span><kbd>E</kbd> Power-up</span><span><kbd>Leer</kbd> Drift</span><span><kbd>R</kbd> Zurück auf Strecke</span><span><kbd>C</kbd> Kamera</span><span><kbd>Esc</kbd> Pause</span></div>
+  <div class="corner cc" style="top:34%"><div id="lights" class="hidden"><div class="house"><div class="lamp"></div><div class="lamp"></div><div class="lamp"></div></div><div id="lightsTxt" class="out">3</div></div></div>
+  <div class="corner cc" style="top:24%"><div id="bigMsg" class="out off"></div></div>
+  <div class="corner cc" style="top:16%"><div id="drift"><div class="t">DRIFT</div><div id="driftScore" class="out">0</div><div class="m out-s"><span id="driftMult">×1</span> · <span id="driftAngle">0°</span></div></div></div>
+  <div class="corner cc" style="top:58%"><div id="hint">Auto liegt falsch – <kbd>R</kbd> drücken</div></div>
+</div>
+
+<!-- ======================= Pause ======================= -->
+<div id="pause" class="screen">
+  <div class="modal-bg"></div>
+  <div class="stage1600">
+    <div class="panel" id="pausePanel">
+      <h2>PAUSE</h2>
+      <button class="btn" id="pResume"><span class="ic" data-ic="play"></span><span>WEITER</span></button>
+      <button class="btn orange" id="pRestart"><span>NEUSTART</span></button>
+      <button class="btn blue" id="pHelp"><span>STEUERUNG</span></button>
+      <button class="btn red" id="pMenu"><span>HAUPTMENÜ</span></button>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= Ergebnis ======================= -->
+<div id="results" class="screen">
+  <div class="modal-bg"></div>
+  <div class="stage1600">
+    <div class="panel" id="resPanel">
+      <div id="resHead"><div class="trophy" data-ic="trophy"></div><div id="resPlace" class="out">1.</div><div><h2 id="resTitle">SIEG!</h2><div class="sub" id="resSub"></div></div></div>
+      <div class="resTable" id="resTable"></div>
+      <div class="pfoot">
+        <button class="btn red" id="rMenu"><span>HAUPTMENÜ</span></button>
+        <button class="btn orange" id="rTrack"><span>ANDERE STRECKE</span></button>
+        <button class="btn go" id="rAgain"><span>NOCHMAL</span></button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= Crash-Labor ======================= -->
+<div id="labPanel" class="corner tr hidden">
+  <h2>CRASH-LABOR</h2>
+  <div class="sub">Rammbock auslösen und Schaden live prüfen. Maus ziehen = Kamera drehen, Mausrad = Zoom.</div>
+  <h4>Aufprallzone</h4>
+  <div class="zones">
+    <button data-zone="fl">Front links</button><button data-zone="front">Front</button><button data-zone="fr">Front rechts</button>
+    <button data-zone="left">Links</button><button data-zone="roof">Dach</button><button data-zone="right">Rechts</button>
+    <button data-zone="rl">Heck links</button><button data-zone="rear">Heck</button><button data-zone="rr">Heck rechts</button>
+  </div>
+  <h4>Tempo</h4>
+  <div class="sp"><span>10</span><b id="speedVal">60 km/h</b><span>160</span></div>
+  <input type="range" id="speed" min="10" max="160" step="5" value="60">
+  <h4>Gegner</h4>
+  <div class="seg">
+    <button data-mass="1100">Kleinwagen 1,1 t</button><button data-mass="1600">Limousine 1,6 t</button>
+    <button data-mass="2400">SUV 2,4 t</button><button data-mass="7500">LKW 7,5 t</button>
+  </div>
+  <button class="btn red" id="crashBtn"><span>CRASH!</span></button>
+  <div class="tools">
+    <button class="btn white" id="repairBtn"><span>Reparieren</span></button>
+    <button class="btn white" id="slowBtn"><span>Zeitlupe (T)</span></button>
+    <button class="btn white" id="driveBtn"><span>Selbst fahren</span></button>
+    <button class="btn white" id="labBack"><span>Hauptmenü</span></button>
+  </div>
+  <h4>Auswertung</h4>
+  <div class="read">
+    <span>Letzter Aufprall</span><span id="labHit">–</span>
+    <span>Höchstgeschw.</span><span id="labTop">–</span>
+    <span>Lose Teile</span><span id="labLoose">–</span>
+    <span>Abgerissen</span><span id="labLost">–</span>
+  </div>
+</div>
+
+<div class="corner cc" style="top:80%;z-index:40;pointer-events:none"><div id="toasts"></div></div>
+
+<script>/*BUNDLE*/</script>
+</body>
+</html>
