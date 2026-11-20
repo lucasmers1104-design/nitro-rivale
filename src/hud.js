@@ -120,8 +120,8 @@ function seg(ctx, text, x, y, size, align = 'center', ghost = null) {
   ctx.restore();
 }
 function lamp(ctx, kind, x, y, s, on, color) {
+  if (!on) return; // ohne Gehäuse nur leuchtende Lampen zeigen
   ctx.save();
-  ctx.globalAlpha = on ? 1 : 0.1;
   ctx.strokeStyle = ctx.fillStyle = color;
   if (on) { ctx.shadowColor = color; ctx.shadowBlur = 10; }
   ctx.lineWidth = 1.7;
@@ -153,13 +153,13 @@ function lamp(ctx, kind, x, y, s, on, color) {
 export class Cluster {
   constructor(cv) {
     this.cv = cv;
-    this.w = 680; this.h = 280;
+    this.w = 524; this.h = 280; // nur die zwei Rundinstrumente, eng nebeneinander
     this.ctx = setupCanvas(cv, this.w, this.h);
     this.dpr = Math.min(window.devicePixelRatio || 1, 2);
     this.n = { rpm: 0, rpmV: 0, spd: 0, spdV: 0, fuel: 0.86, cons: 20 };
     this.fuel = 0.86; this.cons = 20; this.odo = 95395; this.trip = 25; this.t = 0;
     this.bgKey = null;
-    this.R = 118; this.cy = 156; this.lx = 158; this.rx = this.w - 158;
+    this.R = 118; this.cy = 156; this.lx = 130; this.rx = this.w - 130;
   }
   renderBg(maxK, red) {
     const W = this.w, H = this.h, R = this.R, cy = this.cy;
@@ -167,14 +167,7 @@ export class Cluster {
     cv.width = W * this.dpr; cv.height = H * this.dpr;
     const ctx = cv.getContext('2d');
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-    // Gehäuse mit Hutze
-    const hg = ctx.createLinearGradient(0, 0, 0, H);
-    hg.addColorStop(0, '#1c1d21'); hg.addColorStop(0.25, '#101114'); hg.addColorStop(1, '#08090b');
-    ctx.beginPath(); ctx.moveTo(14, H); ctx.lineTo(4, 82); ctx.bezierCurveTo(60, 8, W - 60, 8, W - 4, 82); ctx.lineTo(W - 14, H); ctx.closePath();
-    ctx.fillStyle = hg; ctx.fill();
-    ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,255,255,0.06)'; ctx.stroke();
-    // Strukturkörnung
-    for (let i = 0; i < 900; i++) { ctx.fillStyle = `rgba(255,255,255,${Math.random() * 0.025})`; ctx.fillRect(Math.random() * W, 30 + Math.random() * (H - 30), 1, 1); }
+    // Kein Gehäuse mehr: nur die Rundinstrumente schweben über dem Bild
     for (const cx of [this.lx, this.rx]) {
       tube(ctx, cx, cy, R * 1.06);
     }
@@ -184,10 +177,6 @@ export class Cluster {
     subScale(ctx, this.lx, cy + R * 0.47, sr, ['0', '½', '1'], 'fuel', true);
     subScale(ctx, this.rx, cy + R * 0.47, sr, ['0', '10', '20'], 'l/100 km', false);
     for (const cx of [this.lx, this.rx]) chromeRing(ctx, cx, cy, R * 1.0, R * 0.075);
-    // Schatten der Hutze über den Instrumenten
-    const sh = ctx.createLinearGradient(0, 20, 0, 120);
-    sh.addColorStop(0, 'rgba(0,0,0,0.55)'); sh.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.fillStyle = sh; ctx.fillRect(0, 20, W, 100);
     return cv;
   }
   glass(ctx, cx, cy, R) {
@@ -227,25 +216,6 @@ export class Cluster {
     needle(ctx, this.rx, cy, R * 0.86, R * 0.2, R * 0.05, ang(n.rpm / 1000, maxK));
     hub(ctx, this.rx, cy, R * 0.13);
     this.glass(ctx, this.lx, cy, R); this.glass(ctx, this.rx, cy, R);
-    // Warnleuchten
-    lamp(ctx, 'arrowL', 26, 140, 20, false, '#3fd46a');
-    lamp(ctx, 'arrowR', W - 26, 140, 20, false, '#3fd46a');
-    lamp(ctx, 'brake', W / 2 - 20, 56, 22, car.input.handbrake > 0.5, '#ff3020');
-    lamp(ctx, 'belt', W / 2 + 22, 58, 22, this.t < 4 && Math.floor(this.t * 2) % 2 === 0, '#ff3020');
-    lamp(ctx, 'engine', W / 2 - 20, 86, 22, car.engineHp < 50, '#ffad1f');
-    lamp(ctx, 'tc', W / 2 + 22, 86, 22, (car.slipMax > 6 && car.input.throttle > 0.5) || car.drifting, '#ffad1f');
-    // Displays
-    const d = new Date();
-    lcdBox(ctx, W / 2 - 42, 108, 84, 52);
-    seg(ctx, `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`, W / 2, 124, 19, 'center', '88:88');
-    seg(ctx, '+18.0°C', W / 2, 146, 14, 'center', '+88.8°C');
-    lcdBox(ctx, W / 2 - 58, 170, 116, 82);
-    const gear = car.gear === -1 ? 'R' : car.gear === 0 ? 'N' : String(car.gear);
-    seg(ctx, gear, W / 2 - 36, 194, 32, 'center', '8');
-    seg(ctx, `${Math.round(this.fuel * 720)}km`, W / 2 + 52, 186, 15, 'right', '888km');
-    seg(ctx, car.drifting ? 'DRIFT' : E.turbo > 0 ? `${(car.boost * 1.4).toFixed(1)}bar` : 'SPORT', W / 2 + 52, 205, 12, 'right', '88888');
-    seg(ctx, String(Math.floor(this.odo)).padStart(6, '0'), W / 2 - 52, 236, 14, 'left', '888888');
-    seg(ctx, this.trip.toFixed(1).padStart(5, '0'), W / 2 + 52, 236, 14, 'right', '888.8');
   }
 }
 

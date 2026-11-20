@@ -742,7 +742,7 @@ async function main() {
   $('mpBack').onclick = () => { netLeave(); showScreen('menu'); };
 
   // ---- Lobby (online über den Server, sonst offline mit Bots)
-  const lobby = { code: '', bots: [], level: 0, mode: 'race', fill: true };
+  const lobby = { code: '', bots: [], level: 0, mode: 'race', fill: false }; // Bots nur, wenn man sie selbst hinzufügt
   const profile = () => ({ name: cfg.name, car: selId(), color: sel.colors[selId()], sound: sel.sounds[selId()] });
   async function createRoom() {
     codeMsg('<span class="spin"></span>Raum wird erstellt …', true);
@@ -803,6 +803,11 @@ async function main() {
     $$('[data-add]').forEach((b) => (b.onclick = () => { ui(); setBots([...lobby.bots, newBot()]); }));
     $$('[data-me]').forEach((b) => (b.onclick = () => openGarage('lobby')));
     $$('#segFill button').forEach((b) => b.classList.toggle('on', b.dataset.v === (lobby.fill ? '1' : '0')));
+    const nb = lobby.bots.length;
+    $('lbHint').textContent = lobby.mode !== 'race' ? 'Freies Fahren – ohne Bots. Drücke START!'
+      : lobby.fill ? 'Freie Plätze werden beim Start mit Bots aufgefüllt (ändern unter ANPASSEN)'
+      : nb ? `${nb} Bot${nb > 1 ? 's' : ''} fahren mit · Tippe auf ✕, um einen zu entfernen`
+      : host ? 'Keine Bots – nur echte Fahrer. Tippe auf ein leeres Feld für einen Bot.' : 'Keine Bots – nur echte Fahrer';
     for (const id of ['lbPrev', 'lbNext', 'lbMode', 'lbCustom']) $(id).disabled = !host;
     $('lbStart').disabled = !host;
     $('lbStart').firstElementChild.textContent = host ? 'START' : 'WARTEN …';
@@ -1332,7 +1337,7 @@ async function main() {
     if (!net) return false;
     if (mp.net?.connected) { net.close(); return true; } // zwischenzeitlich doppelt geklickt
     mp.net = net; mp.me = net.id; mp.online = true; mp.room = null;
-    net.on('room', onRoom).on('error', onNetError).on('load', (m) => startNetRace(m.race)).on('countdown', onCountdown)
+    net.on('room', onRoom).on('error', onNetError).on('load', (m) => startNetRace(m.race)).on('countdown', onCountdown).on('wait', onWait)
       .on('s', onStates).on('ev', onNetEvent).on('fin', onNetFinish).on('end', onNetEnd).on('left', onLeft).on('close', onNetClose);
     return true;
   }
@@ -1372,7 +1377,7 @@ async function main() {
     mp.net.send('ev', { e: { type: 'imp', id: car.netId, p: [r2(lp.x), r2(lp.y), r2(lp.z)], d: [r2(ld.x), r2(ld.y), r2(ld.z)], s: r2(sp) } });
   }
   async function startNetRace(info) {
-    mp.raceInfo = info; mp.inRace = true; mp.ended = false;
+    mp.raceInfo = info; mp.inRace = true; mp.ended = false; mp.goAt = null; mp.warmed = false; mp.waitMsg = '';
     state.lastRace = null;
     clearTimeout(resT);
     showScreen('hud');
@@ -1419,18 +1424,39 @@ async function main() {
     race.start(999); // alle stehen, bis der Server die Ampel freigibt
     state.intro = null;
     mp.waiting = true;
-    bigMsg('<small>Warte auf die anderen Fahrer …</small>', '', 120);
+    bigMsg('<small>Strecke wird vorbereitet …</small>', '', 120);
+    // Erst "bereit" melden, wenn alle Shader fertig sind und schon Bilder liefen –
+    // sonst friert der Rechner genau während der Ampel ein
+    await warmup();
+    if (!mp.inRace || mp.raceInfo !== info) return;
+    mp.warmed = true;
+    if (mp.waiting) bigMsg(mp.waitMsg || '<small>Warte auf die anderen Fahrer …</small>', '', 120);
     mp.net?.send('ready', { race: info.id });
     clock.getDelta();
+  }
+  async function warmup() {
+    try { if (renderer.compileAsync) await renderer.compileAsync(scene, camera); else renderer.compile(scene, camera); } catch { /* egal */ }
+    for (let k = 0; k < 3; k++) await new Promise((r) => requestAnimationFrame(r));
+  }
+  function onWait(m) {
+    if (!mp.inRace || !mp.waiting || m.race !== mp.raceInfo?.id || !m.names?.length) return;
+    const n = m.names.filter((_, k) => m.ids?.[k] !== mp.me).map(escapeHtml);
+    mp.waitMsg = n.length ? `<small>Warte auf ${n.length > 2 ? n.length + ' Fahrer' : n.join(' und ')} …</small>` : '';
+    if (!n.length || !mp.warmed) return; // nur noch ich selbst – meine Vorbereitung läuft
+    bigMsg(`<small>Warte auf ${n.length > 2 ? n.length + ' Fahrer' : n.join(' und ')} …</small>`, '', 120);
   }
   function onCountdown(m) {
     if (!race || !mp.inRace) return;
     for (const id of m.gone || []) removeNetCar(id);
     mp.waiting = false;
     $('bigMsg').classList.add('off');
+    // Grün kommt bei allen zur selben Zeit: Restzeit vom Server minus halbe Laufzeit der Nachricht
+    const lead = Math.max(0, ((m.in ?? 5400) - (mp.net?.rtt || 0) / 2) / 1000);
     if (race.mode === 'race') {
-      race.cd = -2.4;
-      state.intro = { t: 0, dur: 2.4 };
+      mp.goAt = performance.now() + lead * 1000;
+      const intro = Math.max(0, lead - 3);
+      race.cd = -intro;
+      state.intro = intro > 0.3 ? { t: 0, dur: intro } : null;
       $('lights').classList.remove('hidden');
       for (const l of $$('#lights .lamp')) l.className = 'lamp';
       $('lightsTxt').textContent = '';
@@ -1790,6 +1816,8 @@ async function main() {
       }
       // Rennen + Bots
       if (race) {
+        // Online: Ampel an der gemeinsamen Uhr ausrichten statt Bild für Bild mitzuzählen
+        if (race.net && race.phase === 'countdown' && mp.goAt != null) race.cd = 3 - (mp.goAt - performance.now()) / 1000 - dt;
         race.update(dt);
         const N = game.track.N;
         botCtx.cars = race.entries.map((o) => ({ car: o.car, prog: race.progressM(o) }));

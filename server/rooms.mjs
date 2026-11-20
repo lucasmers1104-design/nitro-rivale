@@ -10,6 +10,9 @@ const clampN = (v, a, b, d) => (Number.isFinite(+v) ? Math.min(b, Math.max(a, Ma
 const str = (v, n, d = '') => (typeof v === 'string' ? v.replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, n) : d) || d;
 const color = (v) => (typeof v === 'string' && /^#[0-9a-fA-F]{6}$/.test(v) ? v : '#d9322b');
 
+const READY_WAIT = 60000; // so lange wird höchstens auf Nachzügler gewartet
+const GO_IN = 5400; // ms vom Countdown-Signal bis Grün (2,4 s Kamerafahrt + 3 Lampen)
+
 export class Hub {
   constructor({ now = () => Date.now(), log = () => {}, timers = { setTimeout, clearTimeout } } = {}) {
     this.now = now;
@@ -60,7 +63,7 @@ export class Hub {
       case 'settings': if (room && this.isHost(c, room) && room.state === 'lobby') { this.settings(room, m); this.sync(room); } break;
       case 'bots': if (room && this.isHost(c, room) && room.state === 'lobby') { this.setBots(room, m.list); this.sync(room); } break;
       case 'start': if (room && this.isHost(c, room) && room.state === 'lobby') this.start(room, m); break;
-      case 'ready': if (room && room.race && m.race === room.race.id) { room.race.ready.add(c.id); this.checkReady(room); } break;
+      case 'ready': if (room && room.race && m.race === room.race.id) { room.race.ready.add(c.id); this.waitInfo(room); this.checkReady(room); } break;
       case 's': if (room && room.race && Array.isArray(m.c)) this.relayState(c, room, m); break;
       case 'ev': if (room && room.race && m.e && typeof m.e === 'object') this.relayEvent(c, room, m.e); break;
       case 'fin': if (room && room.race) this.finish(c, room, m); break;
@@ -87,7 +90,7 @@ export class Hub {
     this.leave(c);
     const code = this.newCode();
     const room = { code, host: c.id, players: [c.id], bots: [], state: 'lobby', race: null, created: this.now(),
-      settings: { level: 'tal', laps: 3, items: true, skill: 'normal', mode: 'race', fill: true } };
+      settings: { level: 'tal', laps: 3, items: true, skill: 'normal', mode: 'race', fill: false } };
     this.rooms.set(code, room);
     c.room = code;
     this.log(`Raum ${code} erstellt von ${c.name}`);
@@ -121,7 +124,7 @@ export class Hub {
       if (room.race) for (const g of room.race.grid) if (g.owner === c.id) g.gone = true;
     }
     this.broadcast(room, { t: 'left', id: c.id, host: room.host });
-    if (room.race) { room.race.ready.delete(c.id); this.checkReady(room); this.checkEnd(room); }
+    if (room.race) { room.race.ready.delete(c.id); this.waitInfo(room); this.checkReady(room); this.checkEnd(room); }
     this.sync(room);
   }
   closeRoom(room) {
@@ -167,8 +170,16 @@ export class Hub {
     room.state = 'loading';
     this.broadcast(room, { t: 'load', race: { id: race.id, level: s.level, laps: s.laps, items: s.items, skill: s.skill, mode: s.mode, grid, seed: Math.floor(Math.random() * 1e9) } });
     this.sync(room);
-    race.timer = this.T.setTimeout(() => this.countdown(room, race.id), 30000); // Nachzügler nicht ewig abwarten
+    this.waitInfo(room);
+    race.timer = this.T.setTimeout(() => this.countdown(room, race.id), READY_WAIT); // Nachzügler nicht ewig abwarten
     this.log(`Rennen ${race.id} in ${room.code}: ${s.level}, ${grid.length} Autos`);
+  }
+  // Allen sagen, auf wen noch gewartet wird
+  waitInfo(room) {
+    const r = room.race;
+    if (!r || r.started) return;
+    const ids = room.players.filter((p) => !r.ready.has(p));
+    this.broadcast(room, { t: 'wait', race: r.id, ids, names: ids.map((p) => this.clients.get(p)?.name || 'Fahrer') });
   }
   checkReady(room) {
     const r = room.race;
@@ -182,7 +193,7 @@ export class Hub {
     r.started = true;
     r.startedAt = this.now();
     room.state = 'race';
-    this.broadcast(room, { t: 'countdown', race: r.id, gone: r.grid.filter((g) => g.gone).map((g) => g.id) });
+    this.broadcast(room, { t: 'countdown', race: r.id, in: GO_IN, gone: r.grid.filter((g) => g.gone).map((g) => g.id) });
     this.sync(room);
     // Sicherheitsnetz: Rennen endet spätestens nach 20 Minuten
     r.endTimer = this.T.setTimeout(() => this.end(room, id), 20 * 60 * 1000);

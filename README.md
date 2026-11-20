@@ -72,7 +72,7 @@ Freunde im selben WLAN öffnen `http://<IP-deines-PCs>:8080`. Unter Windows einm
 ### Online stellen (Coolify + Cloudflare Tunnel)
 1. Den Projektordner in ein Git-Repo legen (privat geht, `.gitignore` liegt bei; `dist/sounds` muss mit rein).
 2. Coolify → Projekt → **+ Neu** → Repository wählen → Build Pack **Dockerfile**. Das Dockerfile baut das Spiel selbst (`npm ci` + `node build.mjs`).
-3. **Ports Exposes: 8080**, Health-Check-Pfad `/health`. Domain z. B. `nitro.deine-domain.de` – so eintragen wie bei deinen anderen Apps hinter dem Tunnel.
+3. **Ports Exposes: 8080**, Health-Check-Pfad `/health`. Domain z. B. `nitro-server.traumcode.cloud` – so eintragen wie bei deinen anderen Apps hinter dem Tunnel.
 4. Cloudflare Zero Trust → Tunnel → **Public Hostname** für die Subdomain anlegen, Ziel wie bei den anderen Apps (Coolify-Proxy). WebSockets laufen durch den Tunnel ohne Extra-Einstellung.
 5. **Wichtig:** Für diese Subdomain **keine Access-Anmeldung** – falls eine Wildcard-Access-App deine Domain abdeckt, eine Bypass-Regel „Everyone“ für die Subdomain anlegen. Sonst kommen deine Freunde nicht ins Spiel und `/ws` wird blockiert.
 6. Prüfen: `https://nitro.deine-domain.de/health` zeigt `{"ok":true,...}` → Spiel öffnen → Mehrspieler → Raum erstellen.
