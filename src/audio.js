@@ -457,14 +457,15 @@ export class GameAudio {
     out.gain.linearRampToValueAtTime(0.17 * vol * H.level, t + H.attack);
     this.horns.set(id, { oscs, out, release: H.release });
   }
-  hornStop(id) {
+  // Melodie-Hupen spielen zu Ende; force bricht sie ab (Werkstatt-Vorschau: sonst blockiert sie die nächste Hupe)
+  hornStop(id, force = false) {
     const h = this.horns?.get(id);
-    if (!h || h.melody) return;
-    const t = this.ctx.currentTime;
+    if (!h || (h.melody && !force)) return;
+    const t = this.ctx.currentTime, rel = h.release ?? 0.05;
     h.out.gain.cancelScheduledValues(t);
     h.out.gain.setValueAtTime(h.out.gain.value, t);
-    h.out.gain.linearRampToValueAtTime(0, t + h.release);
-    for (const o of h.oscs) { try { o.stop(t + h.release + 0.05); } catch { /* schon gestoppt */ } }
+    h.out.gain.linearRampToValueAtTime(0, t + rel);
+    for (const o of h.oscs) { try { o.stop(t + rel + 0.05); } catch { /* schon gestoppt */ } }
     this.horns.delete(id);
   }
   hornVolume(id, vol) {

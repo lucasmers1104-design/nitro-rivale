@@ -224,7 +224,7 @@ export class Items {
           if (h.type === 'barrel' && d < 2.6) { this.explode(h.pos, 7, 1.15, h.owner); this.emit?.({ type: 'boom', hz: h.id, pos: [h.pos.x, h.pos.y, h.pos.z], r: 7, k: 1.15 }); gone = true; break; }
         }
       }
-      if (gone) { this.group.remove(h.mesh); h.mesh.traverse((o) => o.geometry?.dispose()); if (h.body) this.g.world.removeRigidBody(h.body); this.hazards.splice(k, 1); }
+      if (gone) this.dropHazard(h);
     }
 
     // Raketen
@@ -367,7 +367,12 @@ export class Items {
     grp.position.copy(pos);
     this.group.add(grp);
     this.hazards.push({ type: 'barrel', id, pos: pos.clone().setY(pos.y + 0.6), mesh: grp, age: 0, life: 45, owner });
-    while (this.hazards.filter((h) => h.type === 'barrel').length > 8) { const old = this.hazards.find((h) => h.type === 'barrel'); this.group.remove(old.mesh); this.hazards.splice(this.hazards.indexOf(old), 1); }
+    while (this.hazards.filter((h) => h.type === 'barrel').length > 8) this.dropHazard(this.hazards.find((h) => h.type === 'barrel'));
+  }
+  dropHazard(h) {
+    this.group.remove(h.mesh); h.mesh.traverse((o) => o.geometry?.dispose());
+    if (h.body) { this.g.world.removeRigidBody(h.body); h.body = null; }
+    this.hazards.splice(this.hazards.indexOf(h), 1);
   }
   spawnRocket(start, dir, speed, owner, target, id) {
     const grp = new THREE.Group();
@@ -559,10 +564,11 @@ export class Items {
     if (e.type === 'boom') {
       if (!Array.isArray(e.pos) || e.pos.length !== 3 || !e.pos.every(Number.isFinite)) return;
       const pos = V(e.pos);
-      if (e.hz) { const h = this.hazards.find((x) => x.id === e.hz); if (!h) return; this.group.remove(h.mesh); this.hazards.splice(this.hazards.indexOf(h), 1); }
-      if (e.rk) { const r = this.rockets.find((x) => x.id === e.rk); if (!r) return; this.dropRocket(r); }
+      let by = byId(e.id);
+      if (e.hz) { const h = this.hazards.find((x) => x.id === e.hz); if (!h) return; by = h.owner; this.dropHazard(h); }
+      if (e.rk) { const r = this.rockets.find((x) => x.id === e.rk); if (!r) return; by = r.owner; this.dropRocket(r); }
       // Werte von anderen Clients begrenzen (sonst könnte einer alle Autos wegsprengen)
-      this.explode(pos, clamp(Number(e.r) || 6, 1, 8), clamp(Number(e.k) || 1, 0, 1.5), byId(e.id), { stun: !!e.rk });
+      this.explode(pos, clamp(Number(e.r) || 6, 1, 8), clamp(Number(e.k) || 1, 0, 1.5), by, { stun: !!e.rk });
     }
   }
 

@@ -130,3 +130,9 @@ Läuft die Seite woanders als der Server, kann unter Einstellungen → „Spiels
 4. Prüfen: `https://nitro-server.traumcode.cloud/health` zeigt `"store":"ok"` und `"saves": …`. Steht dort `"fehler"`, kann der Server nicht in den Ordner schreiben.
 
 Ohne Volume gehen die Spielstände auf dem Server bei jedem Redeploy verloren (im Browser bleiben sie, und das Spiel lädt sie beim nächsten Start wieder hoch).
+
+### v9.2: Drift, Runden, Abkürzungen, Tastatur
+- **Drift** ruhiger und besser steuerbar (≈ 27–42° statt 36–56°, straffere Regelung, schnellerer Ausstieg). **Drift-Cancel:** Bremse antippen oder Leertaste ohne Lenken → sofort Grip, Mini-Turbo verfällt. Test: `node test-drift.mjs`.
+- **Runden:** Nach einer Abkürzung hing der Fortschritt bisher fast eine Runde fest. Jetzt wird nach ~1 s auf der Strecke weitergezählt (ohne die abgekürzte Strecke). Test: `node test-laps.mjs`.
+- **Abkürzungen:** Leitplanken an allen Stellen, wo Querfahren über die Wiese viel spart (`world.js`, Typ `rail`). `node test-world.mjs` prüft, dass jede solche Linie gesperrt ist.
+- **Tastatur:** Power-up jetzt `E` oder `Q` (Shift löste unter Windows die Einrastfunktion aus). Tab/Alt/F10 im Rennen gesperrt (schoben den Fokus aus dem Spiel). Im Vollbild beendet kurzes Esc nicht mehr das Vollbild.

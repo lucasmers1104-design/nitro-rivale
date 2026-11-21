@@ -221,7 +221,10 @@ async function main() {
     renderer.toneMappingExposure = T.exposure;
   }
 
-  async function loadLevel(id) {
+  // Ladevorgänge nacheinander: zwei gleichzeitige (Doppelklick auf CRASH-LABOR) bauten sonst zwei Strecken in eine Physikwelt
+  let levelLoad = Promise.resolve();
+  const loadLevel = (id) => (levelLoad = levelLoad.catch(() => {}).then(() => buildLevel(id)));
+  async function buildLevel(id) {
     if (level && level.level.id === id) return;
     $('loading').classList.remove('hidden');
     setLoad(0.35, `Strecke „${LEVELS[id].name}“ wird gebaut …`);
@@ -266,7 +269,10 @@ async function main() {
     const p = t && (!isStock(t) || t.horn || (opts.restrict ?? 1) < 1) ? applyTune(base, t, opts.restrict ?? 1) : base;
     const c = new Car(game, p, color, opts); c.uid = ++uid; c.tuneSrc = t; c.restrict = opts.restrict ?? 1; return c;
   };
-  const sel = Object.assign({ idx: 0, colors: Object.fromEntries(CAR_ORDER.map((id) => [id, CARS[id].colors[0]])), sounds: Object.fromEntries(CAR_ORDER.map((id) => [id, CARS[id].sound])) }, cfg.car || {});
+  const sel = Object.assign({ idx: 0 }, cfg.car || {});
+  // je Auto mischen: Spielstände von vor v8 kennen Brummi/Vipera nicht (sonst weiß lackiert, ohne Motorsound)
+  sel.colors = { ...Object.fromEntries(CAR_ORDER.map((id) => [id, CARS[id].colors[0]])), ...sel.colors };
+  sel.sounds = { ...Object.fromEntries(CAR_ORDER.map((id) => [id, CARS[id].sound])), ...sel.sounds };
   const soundOf = (id) => sel.sounds[id];
   const selId = () => CAR_ORDER[sel.idx];
   sel.tunes = prog.tunes;
@@ -527,6 +533,8 @@ async function main() {
   window.addEventListener('keydown', (e) => {
     if (e.target && e.target.tagName === 'INPUT') return;
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) e.preventDefault();
+    // Im Rennen: Tab/Alt/F10 würden den Fokus in die Browser-Leiste schieben – danach reagiert das Auto nicht mehr
+    if (inGameKeys(e)) e.preventDefault();
     // Enter hat hier eine eigene Bedeutung: den zuletzt geklickten (fokussierten) Knopf nicht zusätzlich auslösen
     if (e.code === 'Enter' && ['sp', 'garage', 'tuning'].includes(state.screen)) e.preventDefault();
     if (e.repeat) return;
@@ -553,7 +561,8 @@ async function main() {
     }
     if (sc === 'pause') { if (e.code === 'Escape') setPause(false); return; }
     switch (e.code) {
-      case 'KeyE': case 'ShiftLeft': case 'ShiftRight': useItem(); break;
+      // kein Shift mehr: 5× Shift öffnet unter Windows die Einrastfunktion und holt einen aus dem Spiel
+      case 'KeyE': case 'KeyQ': useItem(); break;
       case 'KeyR': resetPlayer(); break;
       case 'KeyF': if (state.mode !== 'race' && player) { if (state.mode === 'lab' && !state.labDrive) { spawnLabCar(); } else rebuildCar(player); toast('Repariert', 'good'); } break;
       case 'KeyC': state.cam = (state.cam + 1) % 3; break;
@@ -564,7 +573,8 @@ async function main() {
       case 'Escape': if (state.mode === 'lab') goMenu(); else setPause(true); break;
     }
   });
-  window.addEventListener('keyup', (e) => keys.delete(e.code));
+  window.addEventListener('keyup', (e) => { keys.delete(e.code); if (inGameKeys(e)) e.preventDefault(); });
+  function inGameKeys(e) { return ['hud', 'pause'].includes(state.screen) && ['Tab', 'AltLeft', 'AltRight', 'F10', 'ContextMenu'].includes(e.code); }
   window.addEventListener('blur', () => { keys.clear(); if (!mp.inRace && ['race', 'free', 'arena'].includes(state.mode) && state.screen === 'hud') setPause(true); });
 
   function readInput(dt) {
@@ -719,6 +729,7 @@ async function main() {
       setTimeout(() => { if (pending.key === key && !isPending(key)) { pending.key = ''; refreshProgUi(); } }, 3600);
       return 'ask';
     }
+    if (performance.now() - pending.t < 400) return 'ask'; // Doppelklick zählt nicht als „SICHER?“-Bestätigung
     pending.key = '';
     if (buyThing(prog, what) == null) return false;
     saveProg();
@@ -754,7 +765,8 @@ async function main() {
   $('dSettings').onclick = () => openSettings();
   $('dGarage').onclick = () => openGarage('menu');
   $('ibSound').onclick = () => toggleMute();
-  $('ibFull').onclick = () => { try { if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen(); } catch { /* */ } };
+  // Vollbild: Esc festhalten (Tastatur-Sperre), sonst beendet jedes Esc für die Pause sofort das Vollbild
+  $('ibFull').onclick = () => { try { if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen().then(() => navigator.keyboard?.lock?.(['Escape'])).catch(() => {}); } catch { /* */ } };
   $('promoTracks').onclick = () => openInfo('tracks');
   $('promoItems').onclick = () => openInfo('items');
   $('nameInput').value = cfg.name;
@@ -1079,9 +1091,10 @@ async function main() {
         <span><kbd>A</kbd><kbd>D</kbd></span><span>Lenken (Pfeiltasten gehen auch)</span>
         <span><kbd>Leertaste</kbd></span><span>Handbremse antippen = Drift starten · Gas halten = Drift halten</span>
         <span>Im Drift</span><span>In die Kurve lenken = mehr Winkel · gegenlenken oder Gas weg = wieder greifen</span>
+        <span>Drift abbrechen</span><span>Bremse antippen oder <kbd>Leertaste</kbd> ohne Lenken: sofort wieder Grip (Mini-Turbo verfällt)</span>
         <span>Schwung-Wechsel</span><span>Im Drift in die andere Richtung lenken und Handbremse antippen</span>
         <span>Mini-Turbo</span><span>Lange sauber driften: Funken blau → orange → lila. Beim Rausgehen gibt's Schub!</span>
-        <span><kbd>E</kbd> oder <kbd>Shift</kbd></span><span>Power-up einsetzen</span>
+        <span><kbd>E</kbd> oder <kbd>Q</kbd></span><span>Power-up einsetzen</span>
         <span><kbd>R</kbd></span><span>Zurück auf die Strecke</span>
         <span><kbd>F</kbd></span><span>Reparieren (nicht im Rennen)</span>
         <span><kbd>C</kbd></span><span>Kamera: nah, weit, Cockpit</span>
@@ -1341,7 +1354,7 @@ async function main() {
   function playHornPreview(kind) {
     ensureAudio(false).then(() => {
       if (!audio) return;
-      audio.hornStop('preview');
+      audio.hornStop('preview', true);
       audio.hornStart('preview', kind, 0.9);
       clearTimeout(tuneUi.hornT);
       tuneUi.hornT = setTimeout(() => audio?.hornStop('preview'), HORNS[kind]?.melody ? 2400 : 900);
@@ -1380,7 +1393,7 @@ async function main() {
     renderTune();
   }
   function closeTuning() {
-    audio?.hornStop('preview');
+    audio?.hornStop('preview', true);
     showCam.clearViewOffset();
     showScreen('garage');
     renderCarInfo();
@@ -1796,6 +1809,8 @@ async function main() {
       } else if (ev.type === 'final' && ev.e.isPlayer) {
         bigMsg('LETZTE RUNDE!', '', 1.8);
         audio?.sfx('final');
+      } else if (ev.type === 'shortcut' && ev.e.isPlayer) {
+        toast('Abkürzung zählt nicht – die Strecke fehlt dir in der Runde', 'bad');
       } else if (ev.type === 'finish') {
         // Mehrspieler: eigene Autos melden ihren Zieleinlauf dem Server
         if (race.net && !ev.net && !ev.e.remote && race.variant === 'race') mp.net?.send('fin', { id: ev.e.netId, time: ev.e.finishTime, best: ev.e.bestLap });
@@ -1807,7 +1822,7 @@ async function main() {
           playerAuto = race.variant === 'race' ? new BotDriver(player, game.track, 'normal', 0.5) : null;
           resT = setTimeout(showResults, 3200);
         } else if (ev.winner && !ev.e.isPlayer) toast(`${ev.e.name} gewinnt!`, 'gold');
-        else if (ev.net && ev.e.remote && !ev.e.bot) toast(`${ev.e.name} ist im Ziel!`, 'gold');
+        else if (ev.net && ev.e.remote && !ev.e.isBot) toast(`${ev.e.name} ist im Ziel!`, 'gold');
         if (state.resultsShown) renderResults();
       } else if (ev.type === 'done') {
         if (!state.resultsShown) { clearTimeout(resT); resT = setTimeout(showResults, 600); }
@@ -1961,6 +1976,9 @@ async function main() {
     mp.net.send('ev', { e: { type: 'imp', id: car.netId, p: [r2(lp.x), r2(lp.y), r2(lp.z)], d: [r2(ld.x), r2(ld.y), r2(ld.z)], s: r2(sp) } });
   }
   async function startNetRace(info) {
+    // Gastgeber startet, während man in Garage/Werkstatt ist: wie „Zurück“ (sonst bliebe ein nicht gekauftes Auto ausgewählt)
+    if (state.screen === 'tuning') closeTuning();
+    if (state.screen === 'garage') closeGarage();
     mp.raceInfo = info; mp.inRace = true; mp.ended = false; mp.goAt = null; mp.warmed = false; mp.waitMsg = ''; mp.earlyCd = null;
     state.lastRace = null;
     state.classLimit = info.cls || 'open';
@@ -2069,6 +2087,7 @@ async function main() {
       g.snaps.push(st);
       if (g.snaps.length > 30) g.snaps.shift();
       if (st.engineHp != null) g.car.engineHp = st.engineHp;
+      if (st.derbyHp != null) g.car.derbyHp = st.derbyHp; // Derby-Lebenspunkte rechnet der Besitzer (z. B. Raketen-Abzug), sonst andere Balken/Plätze
     }
   }
   // Lage eines entfernten Autos zur Zeit t (lokale ms): 110 ms Puffer, kurz hochrechnen

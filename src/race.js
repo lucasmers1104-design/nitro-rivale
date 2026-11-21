@@ -97,7 +97,18 @@ export class Race {
       let d = n.i - e.lastI;
       if (d < -N / 2) d += N;
       if (d > N / 2) d -= N;
-      if (Math.abs(d) > 75) continue; // Abkürzung über die Wiese zählt nicht
+      if (Math.abs(d) > 75) {
+        // Sprung (Abkürzung über die Wiese): erst wenn das Auto dort ~1 s auf der Strecke fährt, neu einhaken.
+        // Vorwärts wird die übersprungene Strecke nicht gutgeschrieben – sonst hinge der Fortschritt eine ganze Runde fest.
+        if (n.d < tr.width / 2 + 3) e.jumpT = (e.jumpT || 0) + dt; else e.jumpT = 0;
+        if (e.jumpT > 1) {
+          if (d < 0) e.total += d;
+          else if (!e.finished && !e.out) this.events.push({ type: 'shortcut', e });
+          e.lastI = n.i; e.jumpT = 0;
+        }
+        continue;
+      }
+      e.jumpT = 0;
       e.total += d;
       e.lastI = n.i;
       e.offT = n.d > tr.width / 2 + 4 ? e.offT + dt : 0;

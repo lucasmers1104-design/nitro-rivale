@@ -72,6 +72,16 @@ ok(!A.msgs.some((m) => m.t === 's'), 'Absender bekommt seinen eigenen Zustand ni
 A.send('s', { c: [[A.id, 4, 5, 6], st(A.id, 'x', 5, 6), st('b1', 1, null, 3)] });
 await wait(100);
 ok(!B.msgs.some((m) => m.t === 's' && !m._seen), 'kaputte Fahrzustände (zu kurz, keine Zahlen) werden nicht weitergeleitet');
+{ // echter packCar-Zustand (inkl. Derby-Lebenspunkte) kommt durch den Server beim Mitspieler an
+  const { packCar, unpackCar } = await import('./src/net.js');
+  const v0 = () => ({ x: 0, y: 0, z: 0 });
+  const car = { body: { translation: v0, rotation: () => ({ x: 0, y: 0, z: 0, w: 1 }), linvel: v0, angvel: v0 }, steer: 0, input: { throttle: 1 }, rpm: 3000, gear: 2, flame: 0, engineHp: 80, derbyHp: 37 };
+  A.send('s', { c: [packCar(A.id, car, 1234)] });
+  ok(unpackCar((await B.waitFor('s')).c[0]).derbyHp === 37, 'Derby-Lebenspunkte kommen im Fahrzustand beim Mitspieler an');
+  const { defaultServerUrl: url } = await import('./src/net.js');
+  ok(url('https://nitro.de/')[0] === 'wss://nitro.de/ws' && url('http://192.168.1.5:8080')[0] === 'ws://192.168.1.5:8080/ws' && url('nitro.de')[0] === 'wss://nitro.de/ws',
+    'Spielserver-Adresse mit https:// aus der Adresszeile wird zu wss://…/ws');
+}
 B.send('ev', { e: { type: 'imp', id: A.id, p: [0, 0, 0] } });
 B.send('ev', { e: { type: 'imp', id: B.id, p: [1, 2, 3] } });
 const e1 = await C.waitFor('ev');

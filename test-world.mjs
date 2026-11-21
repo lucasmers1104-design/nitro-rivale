@@ -30,6 +30,27 @@ for (const id of LEVEL_ORDER) {
   let objs = 0; L.group.traverse(() => objs++);
   const ys = tr.pts.map((p) => p.y);
   console.log(`${id}: Bauzeit ${ms.toFixed(0)} ms, Objekte ${objs}, Kollider ${world.colliders.len()}, Höhe Straße ${Math.min(...ys).toFixed(1)}..${Math.max(...ys).toFixed(1)} m, Gelände-Abweichung max ${maxErr.toFixed(3)} / Ø ${(sumErr / n).toFixed(4)} m, auf der Straße max ${maxRoad.toFixed(3)} m`);
+  // Abkürzungen: jede gerade Linie quer über die Wiese, die viel Strecke spart, muss eine Leitplanke kreuzen
+  {
+    const P = tr.pts, N = tr.N, step = tr.length / N;
+    let pairs = 0, open = 0;
+    for (let a = 0; a < N; a += 6) for (let gg = 60; gg <= N / 2; gg += 6) {
+      const b = (a + gg) % N, d = Math.hypot(P[a].x - P[b].x, P[a].z - P[b].z), along = gg * step;
+      if (d > 140 || along - d < 35 || d > along * 0.6) continue;
+      pairs++;
+      const y = (x, z) => tr.heightAt(x, z) + 0.6, segs = Math.ceil(d / 4);
+      let hit = false;
+      for (let s = 0; s < segs && !hit; s++) {
+        const x0 = P[a].x + ((P[b].x - P[a].x) * s) / segs, z0 = P[a].z + ((P[b].z - P[a].z) * s) / segs;
+        const x1 = P[a].x + ((P[b].x - P[a].x) * (s + 1)) / segs, z1 = P[a].z + ((P[b].z - P[a].z) * (s + 1)) / segs;
+        const dir = { x: x1 - x0, y: y(x1, z1) - y(x0, z0), z: z1 - z0 }, len = Math.hypot(dir.x, dir.y, dir.z);
+        world.intersectionsWithRay(new RAPIER.Ray({ x: x0, y: y(x0, z0), z: z0 }, { x: dir.x / len, y: dir.y / len, z: dir.z / len }), len, true, (h) => { if (g.owners.get(h.collider.handle)?.type === 'rail') { hit = true; return false; } return true; });
+      }
+      if (!hit) open++;
+    }
+    console.log(`${open ? '✗' : '✓'} ${id}: Abkürzungen gesperrt ${pairs - open}/${pairs} (${tr.cutRails} neue Planken)`);
+    if (open) process.exitCode = 1;
+  }
   L.dispose(); world.free();
 }
 // Auto entfernen gibt Geometrien + Materialien frei (sonst Speicherleck bei jedem Rennen/Streckenwechsel)

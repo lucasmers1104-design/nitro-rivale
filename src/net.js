@@ -8,7 +8,7 @@ export const GAME_SERVER = 'wss://nitro-server.traumcode.cloud/ws';
 // Liefert die Serveradressen in der Reihenfolge, in der sie probiert werden
 export function defaultServerUrl(custom) {
   if (custom) {
-    let u = custom.trim();
+    let u = custom.trim().replace(/^http(s?):\/\//i, 'ws$1://'); // aus der Adresszeile kopiert: https://… → wss://…
     if (!/^wss?:\/\//.test(u)) u = (u.startsWith('localhost') || /^\d/.test(u) ? 'ws://' : 'wss://') + u;
     if (!/\/ws$/.test(u)) u = u.replace(/\/$/, '') + '/ws';
     return [u];
@@ -101,11 +101,11 @@ export function packCar(id, car, t) {
   const b = car.body, p = b.translation(), q = b.rotation(), v = b.linvel(), a = b.angvel();
   const flags = (car.nitro > 0 ? 1 : 0) | (car.armorT > 0 ? 2 : 0) | (car.drifting ? 4 : 0) | (car.oilT > 0 ? 8 : 0) | (car.limiterCut ? 16 : 0) | (car.miniTurbo > 0 ? 32 : 0) | (car.flatT > 0 ? 64 : 0) | (car.ramT > 0 ? 128 : 0) | (car.ghostT > 0 ? 256 : 0) | (car.empT > 0 ? 512 : 0) | (car.stunT > 0 ? 1024 : 0);
   return [id, Math.round(t), r2(p.x), r2(p.y), r2(p.z), r4(q.x), r4(q.y), r4(q.z), r4(q.w), r2(v.x), r2(v.y), r2(v.z), r2(a.x), r2(a.y), r2(a.z),
-    r2(car.steer), r2(car.input.throttle), Math.round(car.rpm), car.gear, r2(car.flame), flags, Math.round(car.engineHp)];
+    r2(car.steer), r2(car.input.throttle), Math.round(car.rpm), car.gear, r2(car.flame), flags, Math.round(car.engineHp), Math.round(car.derbyHp)];
 }
 export function unpackCar(s) {
   return {
     id: s[0], t: s[1], p: { x: s[2], y: s[3], z: s[4] }, q: { x: s[5], y: s[6], z: s[7], w: s[8] }, v: { x: s[9], y: s[10], z: s[11] }, av: { x: s[12], y: s[13], z: s[14] },
-    steer: s[15], throttle: s[16], rpm: s[17], gear: s[18], flame: s[19], flags: s[20] | 0, engineHp: s[21],
+    steer: s[15], throttle: s[16], rpm: s[17], gear: s[18], flame: s[19], flags: s[20] | 0, engineHp: s[21], derbyHp: s[22], // s[22] fehlt bei älteren Clients
   };
 }

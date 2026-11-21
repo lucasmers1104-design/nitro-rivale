@@ -93,3 +93,21 @@ for (const id of ['brutus', 'kaze', 'rhino']) {
   }
   console.log(`${id} – 4 s voll lenken + Vollgas: ${res.join(' | ')}`);
 }
+// Drift-Cancel: Bremse antippen oder Handbremse ohne Lenken → greift sofort wieder, kein Mini-Turbo, kein Pendeln
+let cancelBad = 0;
+for (const id of ['brutus', 'rhino']) {
+  for (const how of ['Bremse', 'Handbremse']) {
+    const [g, c] = fresh(id, 100);
+    run(g, c, 0.2, () => (c.input = { throttle: 0.7, brake: 0, steer: 1, handbrake: 1 }));
+    run(g, c, 2.5, () => (c.input = { throttle: 1, brake: 0, steer: c.driftDir, handbrake: 0 }));
+    const dir = c.driftDir, lv = c.driftLevel; let t8 = null, over = 0, turbo = 0;
+    run(g, c, 1.5, (t) => {
+      c.input = t < 0.12 ? (how === 'Bremse' ? { throttle: 0, brake: 1, steer: 0, handbrake: 0 } : { throttle: 0.8, brake: 0, steer: 0, handbrake: 1 }) : { throttle: 0.8, brake: 0, steer: 0, handbrake: 0 };
+      if (t8 == null && Math.abs(beta(c)) < 8) t8 = t; over = Math.max(over, -beta(c) * dir); turbo = Math.max(turbo, c.miniTurbo);
+    });
+    const good = t8 != null && t8 < 1 && over < 10 && !c.drifting && turbo === 0;
+    if (!good) cancelBad++;
+    console.log(`${good ? '✓' : '✗'} ${id} Drift-Cancel per ${how}: gerade nach ${f(t8, 2)} s, Überschwinger ${f(over)}°, Mini-Turbo (Stufe ${lv}) ${turbo ? 'ausgelöst!' : 'verfallen'}`);
+  }
+}
+if (cancelBad) process.exit(1);

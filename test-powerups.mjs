@@ -102,6 +102,17 @@ const drive = (c, thr = 1) => (c.input = { throttle: thr, brake: 0, steer: 0, ha
   S.items.hazards.find((h) => h.type === 'spikes').life = 0.5;
   step(S, 1); S.items.dispose();
   ok(freed.size === geos.size, `Power-up-Reste freigegeben: ${freed.size}/${geos.size} Geometrien`); }
+// Fass über dem Limit und Fass, das ein Mitspieler sprengt: Geometrien frei, Explosion kennt den Besitzer
+{ const S = setup(1); const [a] = S.cars;
+  const geos = (h) => { const s = []; h.mesh.traverse((o) => o.geometry && s.push(o.geometry)); return s; };
+  const freed = new Set(), watch = (h) => { const g = geos(h); for (const x of g) x.addEventListener('dispose', () => freed.add(x)); return g; };
+  a.item = 'barrel'; S.items.use(a); const g1 = watch(S.items.hazards[0]);
+  for (let k = 0; k < 8; k++) { a.item = 'barrel'; S.items.use(a); }
+  const h2 = S.items.hazards[0], g2 = watch(h2);
+  S.items.events.length = 0;
+  S.items.remote({ type: 'boom', hz: h2.id, pos: [h2.pos.x, h2.pos.y, h2.pos.z], r: 7, k: 1.15 }, () => null);
+  const hit = S.items.events.find((e) => e.type === 'hit');
+  ok([...g1, ...g2].every((g) => freed.has(g)) && hit?.by === a, `Fässer weggeräumt: ${[...g1, ...g2].filter((g) => freed.has(g)).length}/${g1.length + g2.length} Geometrien frei, Treffer von ${hit?.by === a ? 'Besitzer' : 'unbekannt'}`); }
 // Power-ups aus: update/dispose dürfen nicht abstürzen
 { const S = setup(1); S.items.dispose(); S.items = new Items(S.g, S.L.track, { enabled: false });
   let err = null; try { step(S, 0.2); S.items.dispose(); } catch (e) { err = e.message; }

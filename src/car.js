@@ -381,8 +381,19 @@ export class Car {
     this.hbPrev = handbrake > 0.5;
     this.hbT = handbrake > 0.5 ? (hbEdge ? 0 : this.hbT + dt) : 9;
     if (hbEdge) this.flipped = false;
+    // Drift-Cancel: Bremse antippen oder Handbremse ohne Lenkeinschlag → sofort wieder Grip, Mini-Turbo verfällt
+    const brEdge = inp.brake > 0.5 && !this.brPrev;
+    this.brPrev = inp.brake > 0.5;
+    if (handbrake <= 0.5) this.cancelHb = false;
+    if (this.driftF > 0.3 && this.gear > 0 && (brEdge || (hbEdge && Math.abs(inp.steer) < 0.2))) {
+      this.driftF = 0; this.drifting = false; this.wasDrifting = false; this.driftCharge = 0; this.driftLevel = 0;
+      this.cancelT = 0.45; this.cancelHb = handbrake > 0.5;
+      this.events.push({ type: 'driftcancel' });
+    }
+    this.cancelT = Math.max(0, (this.cancelT || 0) - dt);
+    const hbOn = handbrake > 0.5 && !this.cancelHb;
     // Driften startet nur mit der Handbremse (Leertaste) – langes Lenken bricht nie von selbst aus
-    if (handbrake > 0.5 && absV > 7 && this.gear > 0) {
+    if (hbOn && absV > 7 && this.gear > 0) {
       if (!this.flipped && this.hbT < 0.3 && this.driftF >= 0.05 && Math.abs(inp.steer) > 0.5 && Math.sign(inp.steer) !== this.driftDir) {
         this.flipped = true; this.flipT = 1.0;
         this.driftDir = Math.sign(inp.steer);             // Schwung-Wechsel per Handbremse
@@ -392,14 +403,14 @@ export class Car {
       this.driftF = Math.min(1, this.driftF + dt * 7);
       // Antippen der Handbremse dreht das Heck sofort raus (Impuls in Lenkrichtung)
       if (hbEdge && Math.abs(this.steerIn) > 0.2) {
-        const k = Math.min(1.3, absV * 0.045) * Math.sign(this.steerIn);
+        const k = Math.min(0.95, absV * 0.034) * Math.sign(this.steerIn);
         b.applyTorqueImpulse(_imp.copy(_up).multiplyScalar(Iyy * k), true);
       }
     } else {
       // Drift hält, solange Gas anliegt und das Auto schräg steht; Gas weg / Gegenlenken → greift wieder
       const sIn = this.steerIn * this.driftDir;
       // nur einen laufenden Drift halten – nie aus dem Nichts einen starten
-      const holding = this.driftF > 0.02 && P.drive !== 'FWD' && drive > 0.3 && slipDeg > 5 && vLong > 5 && !(sIn < -0.5 && slipDeg < 9);
+      const holding = this.driftF > 0.02 && P.drive !== 'FWD' && drive > 0.3 && slipDeg > 5 && vLong > 5 && !(sIn < -0.5 && slipDeg < 12);
       const target = holding ? 1 : 0;
       const rate = holding ? 3 : slipDeg < 6 ? 7 : drive < 0.1 ? 3.2 : 3.5;
       this.driftF += (target - this.driftF) * Math.min(1, dt * rate);
@@ -465,7 +476,9 @@ export class Car {
     const R = g.RAPIER;
     let grounded = 0, slipMax = 0, grass = 0;
     const driveW = this.driveWeights();
-    const rearGripF = lerp(1, 0.5, dF) * (handbrake > 0.5 ? 0.75 : 1);
+    const hbFresh = this.hbT < 0.35;
+    const rearGripF = lerp(1, 0.5, dF) * (hbOn ? (hbFresh ? 0.75 : 0.92) : 1);
+    const hbBrake = hbOn ? (hbFresh ? handbrake : handbrake * 0.35) : 0;
     for (const w of this.wheels) {
       if (w.lost) { w.grounded = false; w.load = 0; continue; }
       _a.copy(w.local).applyQuaternion(_q).add(_pos);
@@ -508,14 +521,14 @@ export class Car {
       // Längskraft
       let Fx = 0;
       const driven = this.isDriven(w);
-      if (driven && !(handbrake > 0.3 && !w.front)) Fx += driveForce * driveW[w.front ? 0 : 1];
+      if (driven && !(hbBrake > 0.3 && !w.front)) Fx += driveForce * driveW[w.front ? 0 : 1];
       // Traktionskontrolle (im Drift locker)
       const tcs = maxF * lerp(0.92, 1.4, dF) * (this.gear >= 1 && this.gear <= 2 && drive > 0.9 && absV < 25 ? 1.18 : 1);
       let spinT = 0;
       if (driven && Math.abs(Fx) > tcs) { spinT = clamp(Math.abs(Fx) / tcs - 1, 0, 1); Fx = Math.sign(Fx) * tcs; }
       const bf = brake * m * g.gravity * 0.85 * (w.front ? 0.3 : 0.2);
       if (bf > 0) Fx -= Math.sign(wl) * Math.min(bf, (Math.abs(wl) * mq) / dt * 0.5);
-      if (!w.front && handbrake > 0.05) Fx -= Math.sign(wl) * Math.min(maxF * (absV > 8 ? 0.3 : 0.6) * handbrake, (Math.abs(wl) * mq) / dt * 0.5);
+      if (!w.front && hbBrake > 0.05) Fx -= Math.sign(wl) * Math.min(maxF * (absV > 8 ? 0.3 : 0.6) * hbBrake, (Math.abs(wl) * mq) / dt * 0.5);
       if (driven && drive < 0.05) {
         const eb = (0.06 * E.torque * ratioAbs) / W.r * x * driveW[w.front ? 0 : 1];
         Fx -= Math.sign(wl) * Math.min(eb, (Math.abs(wl) * mq) / dt * 0.3);
@@ -561,24 +574,26 @@ export class Car {
         // In die Kurve lenken = mehr Winkel, gegenlenken = weniger, bis das Auto wieder greift.
         const dir = this.driftDir;
         const sIn = this.steerIn * dir;
-        const bDes = clamp(0.4 + 0.24 * (drive - 0.5) + 0.36 * Math.max(sIn, 0) + 0.62 * Math.min(sIn, 0), 0, 0.88);
+        const bDes = clamp(0.36 + 0.12 * (drive - 0.5) + 0.26 * Math.max(sIn, 0) + 0.8 * Math.min(sIn, 0), -0.08, 0.7);
         const bNow = bodySlip * dir;
         this.driftTarget = bDes;
-        const rDrift = this.pathRate + dir * 3.6 * (bDes - bNow);
+        const rDrift = this.pathRate + dir * 4.4 * (bDes - bNow);
         rDes = lerp(rGrip, rDrift, dF);
-        kYaw = lerp(kGrip, 9 * oil, dF);
+        kYaw = lerp(kGrip, 12 * oil, dF);
       }
+      // nach dem Drift-Cancel: kräftig auf Lenkkurs ziehen, damit das Auto sofort greift statt zu pendeln
+      if (this.cancelT > 0) { rDes = rGrip; kYaw = Math.max(kYaw, 18 * oil); }
       b.applyTorqueImpulse(_imp.copy(_up).multiplyScalar(Iyy * kYaw * (rDes - yawRate) * dt), true);
       // Seitliches Rutschen dämpfen, solange nicht gedriftet wird
-      const kSlip = 2.4 * (1 - dF) * (this.onGrass ? 0.5 : 1) * oil;
+      const kSlip = (this.cancelT > 0 ? 8 : 2.4) * (1 - dF) * (this.onGrass ? 0.5 : 1) * oil;
       if (kSlip > 0) {
         const Fl = clamp(-vLat * m * kSlip, -m * aMax * 0.5, m * aMax * 0.5);
         b.applyImpulse(_imp.copy(_right).multiplyScalar(Fl * dt), true);
       }
-      // Sicherheitsnetz: über ~63° wird zurückgedreht -> kein Abflug in den Dreher
-      const excess = Math.abs(bodySlip) - 1.1;
+      // Sicherheitsnetz: über ~52° wird zurückgedreht -> kein Abflug in den Dreher
+      const excess = Math.abs(bodySlip) - 0.9;
       if (excess > 0 && vLong > 0) {
-        b.applyTorqueImpulse(_imp.copy(_up).multiplyScalar(-Math.sign(bodySlip) * Iyy * 14 * Math.min(excess, 0.8) * dt), true);
+        b.applyTorqueImpulse(_imp.copy(_up).multiplyScalar(-Math.sign(bodySlip) * Iyy * 18 * Math.min(excess, 0.8) * dt), true);
       }
       if (inDrift && vH > 3) {
         // Bahn: die Fahrtrichtung dreht zur Nase hin -> das Auto zieht im Bogen um die Kurve

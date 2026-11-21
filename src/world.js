@@ -660,10 +660,46 @@ export function buildWorld(game, levelId = 'tal') {
         const yaw = Math.atan2(b.x - a.x, b.z - a.z);
         mid.y = H(mid.x, mid.z);
         rails.push({ p: mid, yaw, len });
-        addStatic(R.ColliderDesc.cuboid(0.15, 0.6, len / 2 + 0.05).setTranslation(mid.x, mid.y + 0.6, mid.z).setRotation(rotY(yaw)));
+        addStatic(R.ColliderDesc.cuboid(0.15, 0.6, len / 2 + 0.05).setTranslation(mid.x, mid.y + 0.6, mid.z).setRotation(rotY(yaw)), 'rail');
       }
       i = j;
     }
+    // Abkürzungen sperren: wo ein anderer Streckenteil quer über die Wiese viel näher ist als außen herum,
+    // kommt auf die zugewandte Seite eine Leitplanke (~6 m neben dem Asphalt)
+    const P = track.pts, stepM = track.length / N, cut = { '-1': new Uint8Array(N), 1: new Uint8Array(N) };
+    for (let a = 0; a < N; a += 3) for (let g = 60; g <= N / 2; g += 3) {
+      const b = (a + g) % N, d = Math.hypot(P[a].x - P[b].x, P[a].z - P[b].z), along = g * stepM;
+      if (d > 140 || along - d < 35 || d > along * 0.6) continue;
+      for (const [p, q] of [[a, b], [b, a]]) {
+        const s = track.offsetAt(p, P[q].x, P[q].z) > 0 ? 1 : -1;
+        for (let k = -3; k <= 3; k++) cut[s][(p + k + N) % N] = 1;
+      }
+    }
+    const farFromOtherParts = (x, z, k) => {
+      for (let t = 0; t < N; t += 2) {
+        let di = Math.abs(t - k); di = Math.min(di, N - di);
+        if (di > 40 && Math.hypot(P[t].x - x, P[t].z - z) < W / 2 + 5) return false;
+      }
+      return true;
+    };
+    const inZone = (x, z) => zones.some((zn) => zoneWeight({ ...zn, blend: 3 }, x, z) > 0);
+    const nGravel = rails.length;
+    for (const s of [-1, 1]) {
+      for (let k = 0; k < N; k += 5) {
+        const kb = (k + 5) % N;
+        if (!cut[s][k] || !cut[s][kb] || track.gravel[k] === s) continue;
+        if (Math.sign(track.curv[k]) === s && Math.abs(track.curv[k]) > 0.35) continue; // Innenseite enger Kurven frei lassen
+        const a = P[k].clone().addScaledVector(track.side[k], s * (W / 2 + 6));
+        const b = P[kb].clone().addScaledVector(track.side[kb], s * (W / 2 + 6));
+        const mid = a.clone().add(b).multiplyScalar(0.5), len = a.distanceTo(b);
+        if (len < 0.5 || len > 8 || inZone(mid.x, mid.z) || !farFromOtherParts(mid.x, mid.z, k)) continue;
+        const yaw = Math.atan2(b.x - a.x, b.z - a.z);
+        mid.y = H(mid.x, mid.z);
+        rails.push({ p: mid, yaw, len });
+        addStatic(R.ColliderDesc.cuboid(0.15, 0.6, len / 2 + 0.05).setTranslation(mid.x, mid.y + 0.6, mid.z).setRotation(rotY(yaw)), 'rail');
+      }
+    }
+    track.cutRails = rails.length - nGravel; // für Tests
     const railGeo = new THREE.BoxGeometry(0.08, 0.32, 1).translate(0, 0.62, 0);
     const postGeo = new THREE.BoxGeometry(0.12, 0.75, 0.12).translate(0, 0.37, -0.5);
     const rm = new THREE.InstancedMesh(railGeo, flat(0xc5c9cf, { metalness: 0.7, roughness: 0.35, envMap: game.envMap }), Math.max(1, rails.length));
