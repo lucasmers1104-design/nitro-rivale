@@ -122,11 +122,35 @@ const drive = (c, thr = 1) => (c.input = { throttle: thr, brake: 0, steer: 0, ha
   const m = new THREE.Matrix4(), pp = new THREE.Vector3();
   let near = 0, shown = 0; for (let k = 0; k < S.items.smokeWall.mesh.count; k++) { S.items.smokeWall.mesh.getMatrixAt(k, m); pp.setFromMatrixPosition(m); if (pp.distanceTo(cam) < 4) { near++; shown += Math.hypot(m.elements[0], m.elements[1], m.elements[2]) > 0.01 ? 1 : 0; } }
   ok(mine === 0 && shown === 0, `Nebelwand: eigener Schleier ${mine.toFixed(2)} (für Verfolger ${others.toFixed(2)}), ${near} Wolken direkt vor der Kamera, davon sichtbar ${shown}`); }
+// Ausgeschiedene Autos sammeln keine Kisten mehr
+{ const S = setup(1); const [a] = S.cars; const bx = S.items.boxes[0];
+  a.out = true; a.spawn(bx.pos.clone(), 0); step(S, 0.3);
+  const outGot = !!a.item || bx.off > 0;
+  a.out = false; step(S, 0.1);
+  ok(!outGot && !!a.item, `Ausgeschieden: Kiste ${outGot ? 'eingesammelt' : 'bleibt liegen'}, wieder im Rennen: ${a.item || 'nichts'}`); }
+// Geist: Teile, die währenddessen abfallen, sind danach nicht mehr halbdurchsichtig
+{ const S = setup(1); const [a] = S.cars; a.item = 'ghost'; S.items.use(a); step(S, 0.1);
+  const part = a.parts.find((x) => x.state !== 'gone'), dir = new THREE.Vector3(1, 0, 0);
+  a.detachPart(part, dir, 10); a.loseWheel(a.wheels[0], dir);
+  const mats = []; for (const o of [part.obj, a.wheels[0].hold]) o.traverse((m) => { if (m.isMesh) mats.push(...[].concat(m.material)); });
+  const see = mats.filter((m) => m.opacity === 0.32).length;
+  ok(a.ghostOn && see === 0, `Geist: abgefallene Teile wieder fest (${see} von ${mats.length} Materialien halbdurchsichtig)`); }
 // Wahrscheinlichkeiten nach Platz
 { const share = (w, k) => (w[k] || 0) / Object.values(w).reduce((x, y) => x + y, 0);
   const last = itemWeights(1), first = itemWeights(0), mid = itemWeights(0.5);
   ok(share(last, 'rocket') >= 0.2 && share(last, 'nitro') >= 0.2 && !first.rocket && share(mid, 'rocket') > 0 && share(mid, 'rocket') < share(last, 'rocket'),
     `Power-ups nach Platz: Letzter Rakete ${(share(last, 'rocket') * 100).toFixed(0)} %, Nitro ${(share(last, 'nitro') * 100).toFixed(0)} % · Mitte Rakete ${(share(mid, 'rocket') * 100).toFixed(0)} % · Erster Rakete 0 %`);
   ok(!itemWeights(1, { derby: true, hurt: true }).repair && itemWeights(1, { hurt: true }).repair > 3, 'Derby: keine Reparatur, sonst bei Schaden öfter'); }
+// Magnet eines Mitspielers (Ghost, ohne eigene Physik): Strahl endet nach Ablauf; Strahl eines neu aufgebauten Autos verschwindet
+{ const S = setup(2); const [a, b] = S.cars; step(S, 0.3);
+  a.netId = 'A'; b.netId = 'B';
+  S.items.remote({ type: 'use', id: 'B', item: 'magnet', target: 'A' }, (id) => S.cars.find((c) => c.netId === id));
+  const st = { v: { x: 0, y: 0, z: 0 }, av: { x: 0, y: 0, z: 0 }, steer: 0, rpm: 900, gear: 1, throttle: 0, flame: 0, flags: 0 };
+  let shown = false;
+  for (let i = 0; i < 60 * 4; i++) { b.ghostPrep(st, 1 / 60); S.items.update(1 / 60, []); if (i === 30) shown = S.items.beams.has(b); }
+  ok(shown && b.magnetT === 0 && !S.items.beams.has(b), `Magnet beim Mitspieler: Strahl ${shown ? 'sichtbar' : 'fehlt'}, nach 4 s ${S.items.beams.has(b) ? 'NOCH DA' : 'weg'}`);
+  a.magnetT = 3; a.magnetTarget = b; S.items.update(1 / 60, []);
+  const had = S.items.beams.has(a); S.cars.splice(0, 1, { ...a, disposed: true }); a.disposed = true; S.items.update(1 / 60, []);
+  ok(had && !S.items.beams.has(a), 'Magnet: Strahl eines reparierten (neu aufgebauten) Autos wird entfernt'); }
 console.log(out.join('\n'));
 process.exit(out.some((l) => l.startsWith('✗')) ? 1 : 0);

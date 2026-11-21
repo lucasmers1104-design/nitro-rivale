@@ -91,7 +91,8 @@ async function main() {
   const mp = { net: null, online: false, me: null, room: null, inRace: false, raceInfo: null, waiting: false, ended: false, ghosts: new Map(), sendT: 0, pendingJoin: false };
 
   // ------------------------------------------------------------ Skalierung der Oberfläche
-  const setScale = () => document.documentElement.style.setProperty('--s', clamp(Math.min(innerWidth / 1600, innerHeight / 900), 0.5, 1.5).toFixed(4));
+  // untere Grenze klein genug, dass bei schmalen Fenstern (z. B. halber Laptop-Bildschirm) nichts abgeschnitten wird
+  const setScale = () => document.documentElement.style.setProperty('--s', clamp(Math.min(innerWidth / 1600, innerHeight / 900), 0.35, 1.5).toFixed(4));
   setScale();
   for (const el of $$('[data-ic]')) el.innerHTML = (el.dataset.set === 'item' ? ITEM_ICONS : UI_ICONS)[el.dataset.ic] || ITEM_ICONS[el.dataset.ic] || '';
   const setLoad = (p, msg) => { $('loadBar').style.width = Math.round(p * 100) + '%'; if (msg) $('loadMsg').textContent = msg; };
@@ -526,6 +527,8 @@ async function main() {
   window.addEventListener('keydown', (e) => {
     if (e.target && e.target.tagName === 'INPUT') return;
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) e.preventDefault();
+    // Enter hat hier eine eigene Bedeutung: den zuletzt geklickten (fokussierten) Knopf nicht zusätzlich auslösen
+    if (e.code === 'Enter' && ['sp', 'garage', 'tuning'].includes(state.screen)) e.preventDefault();
     if (e.repeat) return;
     keys.add(e.code);
     const sc = state.screen;
@@ -545,7 +548,7 @@ async function main() {
     if (e.code === 'KeyM') { toggleMute(); return; }
     if (['menu', 'sp', 'mp', 'lobby', 'info', 'settings', 'results'].includes(sc)) {
       if (e.code === 'Escape') backFrom(sc);
-      if (e.code === 'Enter' && sc === 'sp') startFromSp();
+      if (e.code === 'Enter' && sc === 'sp') $('spStart').onclick(); // wie START: gesperrte Strecke erst kaufen
       return;
     }
     if (sc === 'pause') { if (e.code === 'Escape') setPause(false); return; }
@@ -735,11 +738,11 @@ async function main() {
   for (const b of $$('button')) b.addEventListener('click', () => { if (audio) ui(); });
 
   // ---- Hauptmenü
+  // Esc wirkt wie der Zurück-Knopf des Bildschirms (Lobby/Mehrspieler: Raum verlassen)
   function backFrom(sc) {
-    if (sc === 'info') $('infoBack').onclick();
-    else if (sc === 'sp' || sc === 'mp' || sc === 'settings') showScreen('menu');
-    else if (sc === 'lobby') showScreen('mp');
-    else if (sc === 'results') goMenu();
+    if (sc === 'lobby' && !$('lbSettings').classList.contains('hidden')) { $('lbSettings').classList.add('hidden'); return; }
+    const id = { info: 'infoBack', sp: 'spBack', mp: 'mpBack', settings: 'setBack', lobby: 'lbBack', results: 'rMenu' }[sc];
+    if (id) $(id).onclick();
   }
   $('mSingle').onclick = () => openSp();
   $('mMulti').onclick = () => openMp();
@@ -811,7 +814,8 @@ async function main() {
     drawTrack($('trCanvas'), id);
     $('trName').textContent = L.name;
     $('trSub').textContent = L.sub;
-    $('trFacts').innerHTML = trackFacts(id);
+    $('trFacts').innerHTML = sp.mode === 'derby' ? '' : trackFacts(id); // km/Kurven der Strecke gelten nicht für die Arena
+    if ((sp.mode === 'elim' || sp.mode === 'derby') && sp.bots < 1) sp.bots = 1; // fährt sonst trotzdem mit 1 Gegner
     $('vLaps').textContent = sp.laps; $('vBots').textContent = sp.bots;
     for (const v of $$('.vLaps')) v.textContent = sp.laps;
     $$('#segSkill button, #segSkill2 button').forEach((b) => b.classList.toggle('on', b.dataset.v === sp.skill));
@@ -888,7 +892,7 @@ async function main() {
     inp.onkeydown = (e) => {
       if (e.key === 'Backspace' && !inp.value && i > 0) { codeInputs[i - 1].focus(); codeInputs[i - 1].value = ''; codeInputs[i - 1].classList.remove('filled'); }
       if (e.key === 'Enter') joinRoom();
-      if (e.key === 'Escape') showScreen('menu');
+      if (e.key === 'Escape') $('mpBack').onclick();
     };
     inp.onpaste = (e) => {
       const t = (e.clipboardData?.getData('text') || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 5);
@@ -1006,9 +1010,10 @@ async function main() {
       : lobby.mode === 'derby' && nb + (online ? R.players.length : 1) < 2 ? 'Derby: Last Man Standing in der Arena – füg Bots hinzu oder warte auf Freunde!'
       : lobby.mode === 'elim' && nb + (online ? R.players.length : 1) < 2 ? 'Ausscheiden: Nach jeder Runde fliegt der Letzte raus – mindestens 2 Fahrer nötig!'
       : lobby.fill ? 'Freie Plätze werden beim Start mit Bots aufgefüllt (ändern unter ANPASSEN)'
-      : nb ? `${nb} Bot${nb > 1 ? 's' : ''} fahren mit · Tippe auf ✕, um einen zu entfernen`
+      : nb ? `${nb > 1 ? nb + ' Bots fahren' : '1 Bot fährt'} mit · Tippe auf ✕, um einen zu entfernen`
       : host ? 'Keine Bots – nur echte Fahrer. Tippe auf ein leeres Feld für einen Bot.' : 'Keine Bots – nur echte Fahrer';
-    for (const id of ['lbPrev', 'lbNext', 'lbMode', 'lbCustom']) $(id).disabled = !host;
+    $('lbMode').disabled = $('lbCustom').disabled = !host;
+    $('lbPrev').disabled = $('lbNext').disabled = !host || lobby.mode === 'derby'; // Derby fährt immer in der Arena
     $('lbStart').disabled = !host;
     $('lbStart').firstElementChild.textContent = host ? 'START' : 'WARTEN …';
     renderSp();
@@ -1103,7 +1108,8 @@ async function main() {
   }
   const fmtKey = (k) => k.replace(/(.{4})(?=.)/g, '$1-');
   function renderSaveState() {
-    $('saveState').textContent = cloud.state === 'ok' ? `✓ Auf dem Spielserver gespeichert · ${fmtC(prog.coins)} Coins · ${prog.cars.length} Autos · ${prog.levels.length} Strecken`
+    const nC = prog.cars.length, nL = prog.levels.length;
+    $('saveState').textContent = cloud.state === 'ok' ? `✓ Auf dem Spielserver gespeichert · ${fmtC(prog.coins)} Coins · ${nC} ${nC === 1 ? 'Auto' : 'Autos'} · ${nL} ${nL === 1 ? 'Strecke' : 'Strecken'}`
       : cloud.state === 'offline' ? 'Spielserver gerade nicht erreichbar – dein Spielstand liegt erst mal nur in diesem Browser.'
       : 'Spielstand wird mit dem Server abgeglichen …';
   }
@@ -1130,7 +1136,7 @@ async function main() {
     $('saveIn').value = '';
     adoptProg(r.data, 'Spielstand geladen!');
   };
-  function applyHudPrefs() { $('hudKeys').classList.toggle('hidden', !cfg.keys); }
+  function applyHudPrefs() { $('hudKeys').classList.toggle('hidden', !cfg.keys || state.mode === 'lab'); } // im Crash-Labor nie (liegt unter dem Labor-Panel)
   applyHudPrefs();
 
   // ---- Garage
@@ -1304,7 +1310,7 @@ async function main() {
     $('tBars').innerHTML = rows.map(([label, k]) => {
       const b0 = clamp(base.stats[k], 0, 1), b1 = clamp(cur.stats[k], 0, 1), dv = cur.stats[k] - base.stats[k];
       const lo2 = Math.min(b0, b1), w = Math.abs(b1 - b0);
-      const pct = Math.abs(dv) < 0.004 ? '' : `${dv > 0 ? '+' : '−'}${Math.round(Math.abs(dv) * 100)}`;
+      const n = Math.round(Math.abs(dv) * 100), pct = n ? `${dv > 0 ? '+' : '−'}${n}` : ''; // kein „−0“
       return `<div class="tb"><span>${label}</span><i><b style="width:${lo2 * 100}%"></b><u class="${dv >= 0 ? 'g' : 'r'}" style="left:${lo2 * 100}%;width:${w * 100}%"></u></i><em class="${dv >= 0 ? 'g' : 'r'}">${pct}</em></div>`;
     }).join('');
     $('tSum').innerHTML = tuneSummary(t, id).map(([tx, cl]) => `<span class="chip ${cl}">${tx}</span>`).join('');
@@ -1432,11 +1438,15 @@ async function main() {
     if (on && state.screen !== 'hud') return;
     state.paused = on && !mp.inRace;
     showScreen(on ? 'pause' : 'hud');
-    $('pRestart').classList.toggle('hidden', state.mode === 'arena' || state.mode === 'lab' || mp.inRace);
+    // Freies Fahren online endet nie von selbst: der Gastgeber holt alle zurück in die Lobby
+    const stop = mp.inRace && isHost() && race?.mode === 'free';
+    $('pRestart').classList.toggle('hidden', state.mode === 'arena' || state.mode === 'lab' || (mp.inRace && !stop));
+    $('pRestart').firstElementChild.textContent = stop ? 'ZUR LOBBY' : 'NEUSTART';
+    $('pNote').classList.toggle('hidden', !mp.inRace);
     clock.getDelta();
   }
   $('pResume').onclick = () => setPause(false);
-  $('pRestart').onclick = () => { state.paused = false; if (state.lastRace) startRace(state.lastRace); };
+  $('pRestart').onclick = () => { if (mp.inRace) { mp.net?.send('stop'); setPause(false); return; } state.paused = false; if (state.lastRace) startRace(state.lastRace); };
   $('pHelp').onclick = () => { openInfo('keys'); };
   $('pMenu').onclick = () => { if (mp.online) netLeave(); goMenu(); };
   $('rMenu').onclick = () => { if (mp.online) netLeave(); goMenu(); };
@@ -1698,8 +1708,9 @@ async function main() {
   // ------------------------------------------------------------ Ausscheiden + Derby
   // Startplätze im Arena-Ring, Blick zur Mitte
   function derbySlot(k, n) {
+    // 0,55 r: genug Abstand zum äußeren Kistenring (0,64 r), sonst hat einer schon vor Grün ein Power-up
     const A = game.track.extras.arena, a = (k / n) * Math.PI * 2 + 0.3;
-    return { pos: new THREE.Vector3(A.x + Math.cos(a) * A.r * 0.6, 0, A.z + Math.sin(a) * A.r * 0.6), yaw: Math.PI / 2 - a };
+    return { pos: new THREE.Vector3(A.x + Math.cos(a) * A.r * 0.55, 0, A.z + Math.sin(a) * A.r * 0.55), yaw: Math.PI / 2 - a };
   }
   // Derby: Totalschaden, aus dem Ring oder abgestürzt = raus. Online meldet jeder nur seine Autos.
   function checkDerby() {
@@ -1758,8 +1769,10 @@ async function main() {
         $('lightsTxt').textContent = 'LOS!';
         level.startLights.forEach((m) => { m.emissive.set(0x30ff40); m.emissiveIntensity = 4; });
         audio?.sfx('go');
-        setTimeout(() => $('lights').classList.add('hidden'), 1100);
-        setTimeout(() => level?.startLights.forEach((m) => { m.emissiveIntensity = 0; }), 4000);
+        // nur für dieses Rennen (Neustart kurz nach Grün: sonst verschwindet die neue Ampel)
+        const r = race;
+        setTimeout(() => race === r && $('lights').classList.add('hidden'), 1100);
+        setTimeout(() => race === r && level?.startLights.forEach((m) => { m.emissiveIntensity = 0; }), 4000);
         // Start-Turbo
         if (player && state.mode === 'race') {
           const x = player.rpm / player.p.engine.redline;
@@ -1842,6 +1855,7 @@ async function main() {
   }
   function showResults() {
     if (state.resultsShown || state.mode !== 'race') return;
+    if (state.paused) { resT = setTimeout(showResults, 500); return; } // erst nach der Pause
     state.resultsShown = true;
     payRace();
     renderResults();
@@ -2078,7 +2092,10 @@ async function main() {
       out.p.set(a.p.x + a.v.x * dt, a.p.y + a.v.y * dt, a.p.z + a.v.z * dt);
       out.q.set(a.q.x, a.q.y, a.q.z, a.q.w);
       out.v.set(a.v.x, a.v.y, a.v.z); out.av.set(a.av.x, a.av.y, a.av.z);
-      Object.assign(out, { steer: a.steer, throttle: a.throttle, rpm: a.rpm, gear: a.gear, flame: a.flame, flags: a.flags });
+      // Seit 1 s nichts mehr (Tab im Hintergrund, Leitung hängt): Power-up-Zustände nicht ewig weiterzeigen.
+      // Ausnahme: Ausgeschiedene beim Ausscheiden bleiben Geist (stehen sonst als Hindernis auf der Strecke)
+      const stale = target - a.t > 1000;
+      Object.assign(out, { steer: a.steer, throttle: a.throttle, rpm: a.rpm, gear: a.gear, flame: a.flame, flags: stale ? (g.car.out ? a.flags & 256 : 0) : a.flags });
     }
     return out;
   }
@@ -2120,6 +2137,7 @@ async function main() {
   }
   function onNetEnd(m) {
     if (!race || !mp.inRace) return;
+    if (race.mode === 'free') { backToLobby(); return; } // kein Ergebnis beim freien Fahren
     for (const f of m.finished || []) onNetFinish(f);
     mp.ended = true;
     race.phase = 'done';
@@ -2198,10 +2216,10 @@ async function main() {
       if (e) {
         const lapNo = clamp(e.lap + 1, 1, race.laps);
         const alive = race.alive().length;
-        $('lapPill').textContent = race.variant === 'derby' ? `NOCH ${alive} AUTOS` : race.variant === 'elim' ? `RUNDE ${Math.max(1, race.leaderLap + 1)} · NOCH ${alive}` : isRace ? `RUNDE ${lapNo}/${race.laps}` : `RUNDE ${Math.max(1, e.lap + 1)}`;
+        $('lapPill').textContent = race.variant === 'derby' ? `NOCH ${alive} ${alive === 1 ? 'AUTO' : 'AUTOS'}` : race.variant === 'elim' ? `RUNDE ${Math.max(1, race.leaderLap + 1)} · NOCH ${alive}` : isRace ? `RUNDE ${lapNo}/${race.laps}` : `RUNDE ${Math.max(1, e.lap + 1)}`;
         $('posBig').textContent = e.place + '.';
         $('posOf').textContent = '/ ' + race.entries.length;
-        const tNow = race.phase === 'countdown' ? 0 : e.finished ? e.finishTime : race.time;
+        const tNow = race.phase === 'countdown' ? 0 : e.finished ? e.finishTime : e.out ? e.outTime : race.time;
         $('tNow').textContent = isRace ? fmt(tNow) : fmt(race.phase === 'countdown' ? 0 : race.time - e.lapStart);
         $('tLast').textContent = fmt(e.lastLap);
         $('tBest').textContent = fmt(e.bestLap);
@@ -2582,6 +2600,13 @@ async function main() {
     else if (r.data && (r.data.rev | 0) > prog.rev) adoptProg(r.data);
     else if (!r.data || prog.rev > (r.data.rev | 0)) cloudPush();
     else setCloud('ok');
+  });
+  // Zweiter Tab im selben Browser hat gespeichert: übernehmen. Sonst zählt jeder Tab seine eigene rev hoch
+  // und der Server behält nur den einen – die Coins/Käufe des anderen Tabs wären weg.
+  window.addEventListener('storage', (e) => {
+    if (e.key !== 'nitrorivale') return;
+    let d; try { d = JSON.parse(e.newValue); } catch { return; }
+    if (d?.saveKey === cfg.saveKey && d.prog?.rev > prog.rev) adoptProg(d.prog);
   });
   // Einladungslink: ?raum=CODE öffnet direkt den Beitritt
   const invite = new URLSearchParams(location.search).get('raum');

@@ -128,6 +128,12 @@ const _a = V(), _b = V(), _c = V(), _d = V(), _imp = V(), _com = V();
 const WORLD_UP = new THREE.Vector3(0, 1, 0);
 
 const DUST = { grass: 0xb59a6a, sand: 0xe0c08a, snow: 0xf4f8fc, gravel: 0xc8b48a, water: 0xd8e8f0 };
+// Geist-Optik zurücknehmen (ganzes Auto oder ein abfallendes Teil): echtes Material wieder einsetzen
+const unghost = (obj) => obj.traverse((o) => {
+  if (!o.userData.matReal) return;
+  const tmp = o.material; o.material = o.userData.matReal; o.userData.matReal = null;
+  [].concat(tmp).forEach((mt) => mt.dispose());
+});
 
 export class Car {
   constructor(game, preset, color, { isPlayer = false, ai = false, remote = false, name = '' } = {}) {
@@ -218,16 +224,12 @@ export class Car {
     if (on === this.ghostOn) return;
     this.ghostOn = on;
     for (const c of this.colliders) c.setCollisionGroups(on ? GHOST_GROUPS : CAR_GROUPS);
+    if (!on) { unghost(this.root); return; }
     this.root.traverse((o) => {
       if (!o.isMesh || o.userData.noGhost) return;
-      if (on) {
-        o.userData.matReal = o.material;
-        const mk = (mt) => { const g = mt.clone(); g.transparent = true; g.opacity = 0.32; g.depthWrite = false; if (g.emissive) { g.emissive = new THREE.Color(0x3a8cff); g.emissiveIntensity = 0.6; } return g; };
-        o.material = Array.isArray(o.material) ? o.material.map(mk) : mk(o.material);
-      } else if (o.userData.matReal) {
-        const tmp = o.material; o.material = o.userData.matReal; o.userData.matReal = null;
-        (Array.isArray(tmp) ? tmp : [tmp]).forEach((mt) => mt.dispose());
-      }
+      o.userData.matReal = o.material;
+      const mk = (mt) => { const g = mt.clone(); g.transparent = true; g.opacity = 0.32; g.depthWrite = false; if (g.emissive) { g.emissive = new THREE.Color(0x3a8cff); g.emissiveIntensity = 0.6; } return g; };
+      o.material = Array.isArray(o.material) ? o.material.map(mk) : mk(o.material);
     });
   }
   // Optik der Power-ups (läuft für eigene und fremde Autos)
@@ -816,6 +818,7 @@ export class Car {
     const obj = part.obj;
     obj.getWorldPosition(_c);
     this.g.fx.chunks.burst(_c, 6, { colors: ['#' + this.paintColor.getHexString(), 0x1b1c20], speed: 4, size: 0.7 });
+    unghost(obj); // fällt während "Geist" ab: sonst bliebe das Teil für immer halbdurchsichtig
     this.g.scene.attach(obj);
     this.deformables = this.deformables.filter((m) => !part.deform.includes(m));
     const vp = this.body.velocityAtPoint(obj.position);
@@ -831,6 +834,7 @@ export class Car {
     this.root.updateMatrixWorld(true);
     w.hold.getWorldPosition(_c);
     this.g.fx.sparks.burst(_c, 30, { speed: 6 });
+    unghost(w.hold);
     this.g.scene.attach(w.hold);
     const vp = this.body.velocityAtPoint(w.hold.position);
     const v = new THREE.Vector3(vp.x, vp.y, vp.z).addScaledVector(dir, -2.5).add(new THREE.Vector3(0, 3, 0));
@@ -868,6 +872,9 @@ export class Car {
     this.ghostT = st.flags & 256 ? 0.3 : 0;
     this.empT = st.flags & 512 ? 0.3 : 0;
     this.stunT = st.flags & 1024 ? 0.3 : 0;
+    // Magnet kommt nur als Ereignis (nicht in den Flags) – hier mitzählen, sonst bleibt der Strahl bei den anderen ewig stehen
+    this.magnetT = Math.max(0, this.magnetT - dt);
+    if (this.magnetT <= 0) this.magnetTarget = null;
     this.applyGhost();
     this.armorT = st.flags & 2 ? 0.5 : 0;
     this.drifting = !!(st.flags & 4);

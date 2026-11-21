@@ -152,7 +152,7 @@ export class Items {
       }
       if (b.off > 0) continue;
       for (const c of cars) {
-        if (!this.owned(c.car)) continue;
+        if (!this.owned(c.car) || c.car.out) continue; // Ausgeschiedene sammeln nichts mehr
         const p = c.car.body.translation();
         if (Math.abs(p.x - b.pos.x) > 2.3 || Math.abs(p.z - b.pos.z) > 2.3 || Math.abs(p.y - b.pos.y) > 3) continue;
         this.hideBox(this.boxes.indexOf(b));
@@ -232,6 +232,8 @@ export class Items {
       const r = this.rockets[k];
       r.age += dt;
       let aim = null;
+      // Derby: Ziel weg (Geist, raus, neu aufgebaut) → nächsten Gegner suchen statt der Rennstrecke zu folgen
+      if (this.arena && (!r.target || r.target.disposed || r.target.out || r.target.ghostT > 0)) r.target = this.nearestCar(r.owner, r.pos);
       if (r.target && !r.target.disposed && r.target.ghostT <= 0) { const q = r.target.body.translation(); aim = new THREE.Vector3(q.x, q.y + 0.2, q.z); }
       else {
         // ohne Ziel: der Strecke folgen
@@ -454,6 +456,8 @@ export class Items {
         b.a.set(p1, p2, cam, 1.2, op * 0.9); b.b.set(p1, p2, cam, 0.7, op);
       } else if (b) { b.a.dispose(); b.b.dispose(); this.beams.delete(c); }
     }
+    // Strahlen von Autos, die es nicht mehr gibt (repariert = neu aufgebaut, Spieler weg)
+    for (const [c, b] of this.beams) if (c.disposed || !(this.g.cars?.() || []).includes(c)) { b.a.dispose(); b.b.dispose(); this.beams.delete(c); }
     // EMP-Blitze aus dem Himmel
     for (let k = this.bolts.length - 1; k >= 0; k--) {
       const e = this.bolts[k];

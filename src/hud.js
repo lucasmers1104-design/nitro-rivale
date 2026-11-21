@@ -286,7 +286,7 @@ export class DamageView {
     const rows = [
       ['Karosserie', Math.round(st.body) + '%', stateCol(bodyF)],
       ['Motorleistung', Math.round(st.power) + '%', stateCol(eF)],
-      ['Lenkung', Math.abs(st.pull) < 0.3 ? 'gerade' : `zieht ${Math.abs(st.pull).toFixed(1)}° ${st.pull > 0 ? 'links' : 'rechts'}`, Math.abs(st.pull) < 1 ? COLS.ok : Math.abs(st.pull) < 3 ? COLS.warn : COLS.crit],
+      ['Lenkung', Math.abs(st.pull) < 0.3 ? 'gerade' : `zieht ${Math.abs(st.pull).toFixed(1).replace('.', ',')}°${st.pull > 0 ? 'links' : 'rechts'}`, Math.abs(st.pull) < 1 ? COLS.ok : Math.abs(st.pull) < 3 ? COLS.warn : COLS.crit],
       ['Räder', `${4 - st.wheelsLost}/4`, st.wheelsLost ? COLS.crit : COLS.ok],
       ['Scheiben', ['intakt', 'gerissen', 'zersplittert'][st.glass], [COLS.ok, COLS.warn, COLS.crit][st.glass]],
     ];

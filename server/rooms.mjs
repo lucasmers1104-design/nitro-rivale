@@ -55,13 +55,13 @@ export class Hub {
   error(c, code, msg) { this.send(c, { t: 'error', code, msg }); }
 
   message(c, raw) {
-    // einfache Drosselung gegen Fluten
+    // einfache Drosselung gegen Fluten – Ziel/Ausscheiden nie verwerfen (sonst endet das Rennen nicht; doppelte werden ignoriert)
     const now = this.now();
     if (now - c.winStart > 1000) { c.winStart = now; c.msgs = 0; }
-    if (++c.msgs > 160) return;
     let m;
     try { m = JSON.parse(raw); } catch { return; }
     if (!m || typeof m.t !== 'string') return;
+    if (++c.msgs > 160 && m.t !== 'fin' && m.t !== 'out') return;
     const room = c.room ? this.rooms.get(c.room) : null;
     switch (m.t) {
       case 'ping': this.send(c, { t: 'pong', c: m.c, s: now }); break;

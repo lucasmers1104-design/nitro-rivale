@@ -76,9 +76,13 @@ B.send('ev', { e: { type: 'imp', id: A.id, p: [0, 0, 0] } });
 B.send('ev', { e: { type: 'imp', id: B.id, p: [1, 2, 3] } });
 const e1 = await C.waitFor('ev');
 ok(e1.e.id === B.id, 'Ereignisse nur für eigene Autos');
+// Zeit anhalten: Flut + Zielmeldung landen sicher im selben Drossel-Fenster
+const realNow = hub.now, T0 = realNow(); hub.now = () => T0;
+for (let k = 0; k < 200; k++) B.send('ping', { c: k });
 B.send('fin', { id: B.id, time: 61.2, best: 19.9 });
-const f1 = await A.waitFor('fin');
-ok(f1.id === B.id && f1.place === 1, 'Zieleinlauf wird an alle gemeldet');
+const f1 = await A.waitFor('fin').catch(() => null);
+hub.now = realNow;
+ok(f1?.id === B.id && f1.place === 1, 'Zieleinlauf wird an alle gemeldet (auch während die Drossel greift)');
 B.send('fin', { id: B.id, time: 50 });
 await wait(100);
 ok(A.take('fin').length === 1, 'doppelte Zielmeldung wird ignoriert');

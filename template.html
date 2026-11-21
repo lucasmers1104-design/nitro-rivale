@@ -119,7 +119,7 @@
   .promo .new { position: absolute; right: 16px; top: -18px; background: #ff4f5e; color: #fff; border: 4px solid var(--navy); border-radius: 14px; padding: 2px 10px; font-size: 20px; -webkit-text-stroke: 4px var(--navy); paint-order: stroke fill; transform: rotate(6deg); }
   .promo .row { display: flex; gap: 10px; align-items: center; }
   .promo .bub { width: 62px; height: 62px; flex: none; border-radius: 50%; background: #fff; border: 4px solid var(--navy); padding: 10px; }
-  .promo h4 { margin: 0; font: 400 27px/1.05 var(--disp); white-space: nowrap; color: #fff; -webkit-text-stroke: 6px var(--navy); paint-order: stroke fill; }
+  .promo h4 { margin: 0; font: 400 24px/1.05 var(--disp); white-space: nowrap; color: #fff; -webkit-text-stroke: 6px var(--navy); paint-order: stroke fill; }
   .promo h4 small { display: block; color: #ffd23e; font-size: 23px; }
   .promo p { margin: 10px 0 0; font-size: 14px; letter-spacing: .04em; color: #fff; -webkit-text-stroke: 3px var(--navy); paint-order: stroke fill; }
   .promo .btn { position: absolute; left: 14px; right: 14px; bottom: 14px; padding: 6px; font-size: 26px; border-radius: 18px; }
@@ -210,7 +210,7 @@
   .lobbyHint { text-align: center; color: var(--mut); font-size: 19px; margin-top: 10px; }
   #lobbyPanel .pfoot .btn { height: 88px; font-size: 38px; flex: 1; }
   #lobbyPanel .pfoot .btn.go { flex: 1.1; }
-  .lobbySettings { position: absolute; right: 30px; top: 150px; width: 440px; z-index: 3; padding: 20px; }
+  .lobbySettings { position: absolute; right: 30px; top: 150px; width: 540px; z-index: 3; padding: 20px; }
   .lobbySettings .opt { margin-bottom: 10px; font-size: 20px; }
 
   /* Info-Panels */
@@ -228,8 +228,9 @@
   .trackList .trackCard canvas { width: 180px; height: 122px; }
   .trackList h3 { font-size: 32px; }
   .trackList .sub { font-size: 17px; }
+  .trackList .lockTag { left: 22px; right: auto; top: 22px; z-index: 1; } /* Preis auf die Karte statt über den Namen */
 
-  #setPanel { left: 400px; top: 130px; width: 800px; min-height: 0; }
+  #setPanel { left: 400px; top: 30px; width: 800px; min-height: 0; }
   #setServer { width: 340px; font: 700 20px/1 var(--font); color: var(--navy); border: 3px solid var(--navy); border-radius: 12px; padding: 8px 12px; outline: none; }
   .slot.mine { cursor: pointer; }
   .slot.mine:hover { box-shadow: 0 0 0 4px #ffd23e; }
@@ -303,6 +304,7 @@
   .tCard.on::after { content: 'EINGEBAUT'; position: absolute; right: 10px; top: 10px; font: 700 12px/1 var(--font); letter-spacing: .1em; color: #fff; background: #4cb83e; border: 3px solid var(--navy); border-radius: 999px; padding: 4px 8px; }
   .tCard .play { position: absolute; right: 12px; bottom: 12px; width: 46px; height: 46px; padding: 0; border-radius: 14px; border-bottom-width: 6px; }
   .tCard .play .ic { width: 22px; height: 22px; }
+  .tCard:has(.play) .ds { padding-right: 50px; } /* Text nicht unter dem Abspiel-Knopf */
   #tStats { left: 1214px; top: 116px; width: 352px; height: 664px; padding: 20px 22px; display: flex; flex-direction: column; gap: 12px; }
   #tPI { display: grid; grid-template-columns: 92px 1fr; gap: 14px; align-items: center; }
   #tPI .big { --cc: #f2b632; width: 92px; height: 100px; display: grid; place-items: center; clip-path: polygon(50% 0, 100% 22%, 100% 74%, 50% 100%, 0 74%, 0 22%); background: var(--navy); }
@@ -407,6 +409,7 @@
   #pausePanel { left: 560px; top: 170px; width: 480px; height: 560px; display: flex; flex-direction: column; gap: 16px; align-items: stretch; padding-top: 30px; }
   #pausePanel h2 { text-align: center; margin: 0 0 6px; font: 400 64px/1 var(--disp); }
   #pausePanel .btn { height: 84px; font-size: 34px; }
+  #pNote { text-align: center; margin-top: -14px; font-size: 21px; color: #e8483a; font-weight: 700; }
   #resPanel { left: 260px; top: 70px; width: 1080px; height: 760px; }
   #resHead { display: flex; align-items: center; gap: 22px; margin-bottom: 8px; }
   #resPlace { font: 400 140px/0.85 var(--disp); }
@@ -414,13 +417,13 @@
   #resHead .sub { font-size: 22px; color: var(--mut); }
   #resHead .trophy { width: 120px; height: 120px; }
   .resTable { display: flex; flex-direction: column; gap: 6px; }
-  .resTable div { display: grid; grid-template-columns: 70px 1fr 220px 160px 150px; align-items: center; gap: 10px; background: #fff; border: 4px solid var(--navy); border-radius: 18px; padding: 4px 14px; font-size: 21px; }
+  .resTable div { display: grid; grid-template-columns: 70px 1fr 210px 190px 140px; align-items: center; gap: 10px; background: #fff; border: 4px solid var(--navy); border-radius: 18px; padding: 4px 14px; font-size: 21px; }
   .resTable div.me { background: linear-gradient(#ffe680, #ffbf2e); }
   .resTable div.h { background: none; border: 0; padding: 0 18px; font-size: 15px; color: var(--mut); letter-spacing: .1em; text-transform: uppercase; }
   .resTable em { font: 400 30px/1 var(--disp); font-style: normal; text-align: center; }
   .resTable .nm { display: flex; gap: 10px; align-items: center; font-weight: 700; }
   .resTable .nm i { width: 18px; height: 18px; border-radius: 50%; border: 3px solid var(--navy); flex: none; }
-  .resTable .t { font-variant-numeric: tabular-nums; }
+  .resTable .t { font-variant-numeric: tabular-nums; white-space: nowrap; }
   #resPanel .pfoot .btn { height: 88px; font-size: 34px; flex: 1; }
 
   /* ---------- Crash-Labor ---------- */
@@ -446,7 +449,7 @@
   #coinPill { position: fixed; z-index: 45; right: 18px; top: 18px; transform: scale(var(--s)); transform-origin: top right; display: none; align-items: center; gap: 10px; background: var(--cream); border: 5px solid var(--navy); border-radius: 999px; padding: 5px 24px 5px 6px; box-shadow: 0 6px 0 rgba(20,22,48,.4); font: 400 36px/1 var(--disp); color: var(--navy); pointer-events: none; }
   #coinPill .ic { width: 50px; height: 50px; }
   body[data-screen="menu"] #coinPill, body[data-screen="sp"] #coinPill, body[data-screen="garage"] #coinPill, body[data-screen="tuning"] #coinPill, body[data-screen="results"] #coinPill, body[data-screen="settings"] #coinPill { display: flex; }
-  body[data-screen="menu"] #coinPill { right: auto; left: 50%; transform: translateX(-50%) scale(var(--s)); transform-origin: top center; }
+  body[data-screen="menu"] #coinPill { right: auto; left: calc(50% + 70px * var(--s)); transform: translateX(-50%) scale(var(--s)); transform-origin: top center; } /* in der Lücke zwischen Logo und Strecken-Kachel */
   #coinPill.bump { animation: cbump .3s ease-out; }
   #coinPill.spend { animation: cshake .45s ease-out; }
   #coinPill.spend b { animation: cred 1s ease-out; }
@@ -505,14 +508,14 @@
   </div>
   <div class="stage1600">
     <div id="menuLogo"><div class="logo1" data-t="NITRO RIVALE"><span>NITRO RIVALE</span></div><br><div class="logo2">RASEN · CRASHEN · GEWINNEN</div></div>
-    <div id="menuTag" class="out-s">Bis zu 8 Fahrer, 4 Strecken, 8 Power-ups – und jede Menge Blech, das fliegt!</div>
+    <div id="menuTag" class="out-s">Bis zu 8 Fahrer, 4 Strecken, 15 Power-ups – und jede Menge Blech, das fliegt!</div>
     <button class="btn" id="mSingle"><span class="ring" data-ic="flag"></span><span>EINZELSPIELER</span></button>
     <button class="btn pink" id="mMulti"><span class="ic" data-ic="people"></span><span>MEHRSPIELER</span></button>
     <button class="btn orange" id="mGarage"><span class="ic" data-ic="garage"></span><span>GARAGE</span></button>
     <button class="btn purple" id="mLab"><span class="ic" data-ic="lab"></span><span>CRASH-LABOR</span></button>
     <button class="btn blue" id="mHelp"><span class="ic" data-ic="help"></span><span>STEUERUNG</span></button>
     <div class="promo p1" id="promoTracks"><div class="new">NEU!</div><div class="row"><div class="bub" data-ic="flag"></div><h4>4 STRECKEN<small>Tal bis Pass</small></h4></div><p>WÜSTE · SCHNEE · KÜSTE</p><button class="btn yellow"><span>ANSEHEN ▶</span></button></div>
-    <div class="promo p2" id="promoItems"><div class="new">NEU!</div><div class="row"><div class="bub" data-ic="rocket" data-set="item"></div><h4>8 POWER-UPS<small>Kisten!</small></h4></div><p>NITRO · RAKETE · SPRUNG</p><button class="btn yellow"><span>ANSEHEN ▶</span></button></div>
+    <div class="promo p2" id="promoItems"><div class="new">NEU!</div><div class="row"><div class="bub" data-ic="rocket" data-set="item"></div><h4>15 POWER-UPS<small>Kisten!</small></h4></div><p>NITRO · RAKETE · SPRUNG</p><button class="btn yellow"><span>ANSEHEN ▶</span></button></div>
     <div id="driverCard">
       <div class="tag">DEIN FAHRER</div>
       <div class="row">
@@ -718,7 +721,7 @@
   <div class="corner br" id="hudKeys"><span><kbd>E</kbd> Power-up</span><span><kbd>Leer</kbd> Drift</span><span><kbd>R</kbd> Zurück auf Strecke</span><span><kbd>C</kbd> Kamera</span><span><kbd>H</kbd> Hupe</span><span><kbd>Esc</kbd> Pause</span></div>
   <div class="corner cc" style="top:34%"><div id="lights" class="hidden"><div class="house"><div class="lamp"></div><div class="lamp"></div><div class="lamp"></div></div><div id="lightsTxt" class="out">3</div></div></div>
   <div class="corner cc" style="top:24%"><div id="bigMsg" class="out off"></div></div>
-  <div class="corner cc" style="top:16%"><div id="drift"><div class="t">DRIFT</div><div id="driftScore" class="out">0</div><div class="m out-s"><span id="driftMult">×1</span> · <span id="driftAngle">0°</span></div></div></div>
+  <div class="corner cc" style="top:34%"><div id="drift"><div class="t">DRIFT</div><div id="driftScore" class="out">0</div><div class="m out-s"><span id="driftMult">×1</span> · <span id="driftAngle">0°</span></div></div></div>
   <div class="corner cc" style="top:58%"><div id="hint">Auto liegt falsch – <kbd>R</kbd> drücken</div></div>
 </div>
 
@@ -728,6 +731,7 @@
   <div class="stage1600">
     <div class="panel" id="pausePanel">
       <h2>PAUSE</h2>
+      <div id="pNote" class="hidden">Online läuft das Rennen weiter!</div>
       <button class="btn" id="pResume"><span class="ic" data-ic="play"></span><span>WEITER</span></button>
       <button class="btn orange" id="pRestart"><span>NEUSTART</span></button>
       <button class="btn blue" id="pHelp"><span>STEUERUNG</span></button>
