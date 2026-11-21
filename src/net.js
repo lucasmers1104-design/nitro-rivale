@@ -99,7 +99,7 @@ const r2 = (v) => Math.round(v * 100) / 100;
 const r4 = (v) => Math.round(v * 10000) / 10000;
 export function packCar(id, car, t) {
   const b = car.body, p = b.translation(), q = b.rotation(), v = b.linvel(), a = b.angvel();
-  const flags = (car.nitro > 0 ? 1 : 0) | (car.armorT > 0 ? 2 : 0) | (car.drifting ? 4 : 0) | (car.oilT > 0 ? 8 : 0) | (car.limiterCut ? 16 : 0) | (car.miniTurbo > 0 ? 32 : 0) | (car.flatT > 0 ? 64 : 0) | (car.ramT > 0 ? 128 : 0) | (car.ghostT > 0 ? 256 : 0) | (car.empT > 0 ? 512 : 0);
+  const flags = (car.nitro > 0 ? 1 : 0) | (car.armorT > 0 ? 2 : 0) | (car.drifting ? 4 : 0) | (car.oilT > 0 ? 8 : 0) | (car.limiterCut ? 16 : 0) | (car.miniTurbo > 0 ? 32 : 0) | (car.flatT > 0 ? 64 : 0) | (car.ramT > 0 ? 128 : 0) | (car.ghostT > 0 ? 256 : 0) | (car.empT > 0 ? 512 : 0) | (car.stunT > 0 ? 1024 : 0);
   return [id, Math.round(t), r2(p.x), r2(p.y), r2(p.z), r4(q.x), r4(q.y), r4(q.z), r4(q.w), r2(v.x), r2(v.y), r2(v.z), r2(a.x), r2(a.y), r2(a.z),
     r2(car.steer), r2(car.input.throttle), Math.round(car.rpm), car.gear, r2(car.flame), flags, Math.round(car.engineHp)];
 }

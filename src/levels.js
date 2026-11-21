@@ -72,7 +72,7 @@ export const THEMES = {
 export const LEVELS = {
   tal: {
     id: 'tal', name: 'Grünes Tal', sub: 'Klassischer Rundkurs am See', theme: 'meadow', ctrl: TAL, width: 14, diff: 1,
-    card: ['#7fd35a', '#3f9a3a'], extras: { arena: { x: 0, z: 222, r: 44 }, lab: { x: 0, z: -248, w: 96, d: 66 }, lake: { x: 222, z: 178, r: 44, level: -0.65 }, ramp: { x: -142, z: 185 } },
+    card: ['#7fd35a', '#3f9a3a'], extras: { arena: { x: 0, z: 242, r: 64 }, lab: { x: 0, z: -248, w: 96, d: 66 }, lake: { x: 222, z: 178, r: 44, level: -0.65 }, ramp: { x: -142, z: 185 } },
   },
   canyon: {
     id: 'canyon', name: 'Wüsten-Canyon', sub: 'Vollgas, Sprunghügel, Haarnadel', theme: 'desert', ctrl: CANYON, width: 15, diff: 2,

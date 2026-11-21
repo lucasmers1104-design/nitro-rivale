@@ -1,6 +1,11 @@
 // Mehrspieler-Server: Ablauf mit drei Clients prüfen (läuft komplett in einem Prozess)
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { createServer } from './server/server.mjs';
-const { server, hub, port } = await createServer({ port: 0, quiet: true });
+import { Saves } from './server/saves.mjs';
+const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nitro-saves-'));
+const { server, hub, saves, port } = await createServer({ port: 0, quiet: true, dataDir });
 const URL = `ws://127.0.0.1:${port}/ws`;
 let fails = 0;
 const ok = (cond, msg) => { console.log((cond ? '  ✓ ' : '  ✗ ') + msg); if (!cond) fails++; };
@@ -58,11 +63,15 @@ ok(!C.msgs.some((m) => m.t === 'countdown'), 'Ampel wartet, bis alle geladen hab
 C.send('ready', { race: L.race.id });
 await C.waitFor('countdown');
 ok(true, 'alle bereit → Countdown an alle');
-A.send('s', { c: [['b1', 1, 2, 3], [A.id, 4, 5, 6], [B.id, 9, 9, 9]] });
+const st = (id, ...v) => [id, ...v, ...Array(21 - v.length).fill(0)]; // wie packCar: id + 21 Zahlen
+A.send('s', { c: [st('b1', 1, 2, 3), st(A.id, 4, 5, 6), st(B.id, 9, 9, 9)] });
 const s1 = await B.waitFor('s');
 ok(s1.c.length === 2 && !s1.c.some((x) => x[0] === B.id), 'Zustände werden weitergeleitet, fremde Autos herausgefiltert');
 await wait(100);
 ok(!A.msgs.some((m) => m.t === 's'), 'Absender bekommt seinen eigenen Zustand nicht zurück');
+A.send('s', { c: [[A.id, 4, 5, 6], st(A.id, 'x', 5, 6), st('b1', 1, null, 3)] });
+await wait(100);
+ok(!B.msgs.some((m) => m.t === 's' && !m._seen), 'kaputte Fahrzustände (zu kurz, keine Zahlen) werden nicht weitergeleitet');
 B.send('ev', { e: { type: 'imp', id: A.id, p: [0, 0, 0] } });
 B.send('ev', { e: { type: 'imp', id: B.id, p: [1, 2, 3] } });
 const e1 = await C.waitFor('ev');
@@ -75,6 +84,7 @@ await wait(100);
 ok(A.take('fin').length === 1, 'doppelte Zielmeldung wird ignoriert');
 A.send('fin', { id: 'b1', time: 62 });
 A.send('fin', { id: A.id, time: 63 });
+await C.waitFor('fin', (m) => m.id === A.id); // sonst kann Cems Meldung Annas überholen (zwei Leitungen)
 C.send('fin', { id: C.id, time: 70 });
 const end = await A.waitFor('end', () => true, 5000);
 ok(end.finished.length === 4 && end.finished.find((f) => f.id === C.id).place === 4, 'alle Menschen im Ziel → Rennende mit Ergebnis');
@@ -134,9 +144,56 @@ ok(!C.msgs.some((m) => m.t === 'out' && m.id === 'b1' && !m._seen), 'Ausscheiden
 B.send('out', { race: L4.race.id, id: C.id });
 const o3 = await B.waitFor('out', (m) => m.id === C.id);
 ok(o3.place === 3, 'Gastgeber wirft den Letzten raus');
+// Jemand geht, während die anderen noch laden
+const E = await client('Ela'), F = await client('Fritz');
+E.send('create', { name: 'Ela' });
+const rE = await E.waitFor('room');
+F.send('join', { code: rE.code, name: 'Fritz' });
+await E.waitFor('room', (m) => m.players.length === 2);
+E.send('settings', { mode: 'derby' });
+await F.waitFor('room', (m) => m.settings.mode === 'derby');
+E.send('start');
+const L5 = await E.waitFor('load');
+F.ws.close();
+await E.waitFor('left', (m) => m.id === F.id);
+E.send('ready', { race: L5.race.id });
+const cd5 = await E.waitFor('countdown');
+ok(cd5.gone.includes(F.id), 'wer beim Laden geht, steht nicht als Geisterauto in der Startaufstellung');
+const w5 = await E.waitFor('fin', (m) => m.winner, 1000).catch(() => null);
+ok(w5?.id === E.id, 'Derby: bleibt beim Start nur einer übrig, gewinnt er sofort (statt 20 Minuten allein)');
+E.ws.close();
 B.ws.close(); C.ws.close(); A.ws.close();
 await wait(200);
 ok(hub.rooms.size === 0, 'leere Räume werden gelöscht');
+// Kaputte Adressen (Seite und /ws) dürfen den Server nicht beenden
+const net = await import('node:net');
+const raw = (txt) => new Promise((r) => { const s = net.connect(port, '127.0.0.1', () => s.write(txt)); s.on('error', r); s.on('data', () => s.end()); s.on('close', r); });
+const upg = 'Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n';
+await raw('GET /% HTTP/1.1\r\nHost: x\r\n\r\n');
+await raw('GET /%00 HTTP/1.1\r\nHost: x\r\n\r\n');
+await raw('GET http://[ HTTP/1.1\r\nHost: x\r\n\r\n');
+await raw(`GET http://[ HTTP/1.1\r\nHost: x\r\n${upg}\r\n`);
+ok((await fetch(`http://127.0.0.1:${port}/health`)).ok, 'kaputte Adressen bringen den Server nicht zum Absturz');
+
+// Spielstände über /api/save
+const api = async (body, method = 'POST') => { const r = await fetch(`http://127.0.0.1:${port}/api/save`, { method, headers: { 'content-type': 'text/plain' }, body: method === 'POST' ? JSON.stringify(body) : undefined }); return { code: r.status, cors: r.headers.get('access-control-allow-origin'), body: method === 'POST' ? await r.json() : null }; };
+const KEY = 'ABCDEFGHJKLM';
+let sv = await api({ key: KEY });
+ok(sv.code === 200 && sv.body.ok && sv.body.data === null && sv.cors === '*', 'Spielstand: unbekannter Code → leer (mit CORS)');
+ok((await api({ key: 'abc' })).code === 400, 'Spielstand: falscher Code wird abgelehnt');
+ok((await api({ key: KEY, data: { rev: 0, coins: 5 } })).code === 400, 'Spielstand: rev muss ≥ 1 sein');
+ok((await api({ key: KEY, data: { rev: 1, big: 'x'.repeat(20000) } })).code === 413, 'Spielstand: zu groß wird abgelehnt');
+sv = await api({ key: KEY, data: { rev: 2, coins: 777 } });
+ok(sv.body.ok && sv.body.rev === 2, 'Spielstand speichern');
+sv = await api({ key: KEY, data: { rev: 1, coins: 5 } });
+ok(!sv.body.ok && sv.body.data.coins === 777, 'älterer Stand überschreibt nicht, Server schickt den neueren');
+ok((await api({ key: KEY })).body.data.coins === 777, 'Spielstand laden');
+ok((await api(null, 'OPTIONS')).code === 204, 'CORS-Vorabanfrage');
+saves.flush();
+ok(new Saves({ dir: dataDir }).get(KEY)?.coins === 777, 'Spielstand liegt nach Neustart noch in der Datei');
+let limit = 0; for (let k = 0; k < 70; k++) if ((await api({ key: KEY })).code === 429) limit++;
+ok(limit > 0, 'zu viele Anfragen werden gedrosselt');
+fs.rmSync(dataDir, { recursive: true, force: true });
 console.log(fails ? `${fails} Fehler` : 'alle Server-Tests bestanden');
 server.close();
 process.exit(fails ? 1 : 0);

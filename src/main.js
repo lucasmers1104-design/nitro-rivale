@@ -18,6 +18,7 @@ import { BotDriver, DerbyDriver } from './bot.js';
 import { Items, ITEMS, ITEM_ORDER } from './items.js';
 import { ITEM_ICONS, UI_ICONS } from './icons.js';
 import { Net, defaultServerUrl, packCar, unpackCar } from './net.js';
+import { normProg, buy as buyThing, partState, partPrice, ownsCar, ownsLevel, carPrice, levelPrice, raceReward, OPP, DERBY_KM_PER_MIN, FREE_CAR } from './economy.js';
 
 const $ = (id) => document.getElementById(id);
 const $$ = (sel) => [...document.querySelectorAll(sel)];
@@ -44,6 +45,48 @@ async function main() {
   const saved = store.load();
   const cfg = Object.assign({ name: 'Fahrer ' + (10 + Math.floor(Math.random() * 89)), vol: 85, gfx: 'hoch', cam: 0, shake: 1, keys: 1, best: {}, car: null, sp: null, server: '' }, saved);
   const persist = () => store.save(cfg);
+  // Spielstand (Coins, gekaufte Autos/Strecken/Teile, eingebautes Tuning): lokal + auf dem Spielserver
+  let prog = normProg(cfg.prog);
+  const KEY_CH = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789', KEY_RE = /^[A-HJ-NP-Z2-9]{12}$/;
+  if (!KEY_RE.test(cfg.saveKey || '')) cfg.saveKey = Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => KEY_CH[b % 32]).join('');
+  cfg.prog = prog; persist();
+  const cloud = { state: 'sync', busy: false, again: false, timer: null };
+  const cloudBases = () => defaultServerUrl(cfg.server).map((u) => u.replace(/^ws/, 'http').replace(/\/ws$/, ''));
+  async function cloudCall(body) {
+    for (const base of cloudBases()) {
+      try {
+        // text/plain: keine CORS-Vorabanfrage nötig
+        const r = await fetch(base + '/api/save', { method: 'POST', headers: { 'content-type': 'text/plain' }, body: JSON.stringify(body), signal: AbortSignal.timeout(6000) });
+        if (r.status === 200) return await r.json();
+      } catch { /* nächster Server */ }
+    }
+    return null;
+  }
+  const setCloud = (s) => { cloud.state = s; if (state.screen === 'settings') renderSaveState(); };
+  async function cloudPush() {
+    if (cloud.busy) { cloud.again = true; return; }
+    cloud.busy = true;
+    if (prog.rev < 1) { prog.rev = 1; cfg.prog = prog; persist(); }
+    const r = await cloudCall({ key: cfg.saveKey, data: prog });
+    cloud.busy = false;
+    if (!r) setCloud('offline');
+    else if (r.ok) setCloud('ok');
+    else if (r.data && (r.data.rev | 0) >= prog.rev) adoptProg(r.data, 'Neuerer Spielstand vom Server geladen');
+    if (cloud.again) { cloud.again = false; cloudPush(); }
+  }
+  function saveProg() {
+    prog.rev++; cfg.prog = prog; persist();
+    clearTimeout(cloud.timer); cloud.timer = setTimeout(cloudPush, 800);
+  }
+  function adoptProg(data, msg) {
+    prog = normProg(data); cfg.prog = prog; persist();
+    sel.tunes = prog.tunes;
+    if (!ownsCar(prog, selId())) { sel.idx = CAR_ORDER.indexOf(prog.cars[0]); sel.lastOwned = sel.idx; saveCar(); if (showModel) rebuildShowModel(); }
+    coinUi.anim++; coinUi.shown = prog.coins; renderCoins();
+    setCloud('ok');
+    if (msg) toast(msg, 'gold');
+    refreshProgUi();
+  }
   // Mehrspieler-Zustand
   const mp = { net: null, online: false, me: null, room: null, inRace: false, raceInfo: null, waiting: false, ended: false, ghosts: new Map(), sendT: 0, pendingJoin: false };
 
@@ -225,7 +268,9 @@ async function main() {
   const sel = Object.assign({ idx: 0, colors: Object.fromEntries(CAR_ORDER.map((id) => [id, CARS[id].colors[0]])), sounds: Object.fromEntries(CAR_ORDER.map((id) => [id, CARS[id].sound])) }, cfg.car || {});
   const soundOf = (id) => sel.sounds[id];
   const selId = () => CAR_ORDER[sel.idx];
-  sel.tunes = Object.assign({}, cfg.tunes || {});
+  sel.tunes = prog.tunes;
+  if (!ownsCar(prog, selId())) sel.idx = Math.max(0, CAR_ORDER.indexOf(FREE_CAR));
+  sel.lastOwned = sel.idx;
   const curTune = (id = selId()) => normTune(sel.tunes[id]);
   // Klassenlimit des aktuellen Rennens (SP-Einstellung oder Lobby des Gastgebers)
   const raceClass = () => state.classLimit || 'open';
@@ -249,6 +294,7 @@ async function main() {
     mp.ghosts.clear();
     playerAuto = null;
     audio?.rivalsClear();
+    if (audio?.horns) for (const id of audio.horns.keys()) audio.hornStop(id); // sonst hupt ein Mitspieler ewig weiter
   }
   function placeCar(c, pos, yaw) {
     const p = pos.clone();
@@ -272,7 +318,7 @@ async function main() {
       dummies.push(c);
     });
   }
-  const removeDebris = (d) => { game.owners.delete(d.col.handle); game.world?.removeRigidBody(d.body); scene.remove(d.obj); };
+  const removeDebris = (d) => { game.owners.delete(d.col.handle); game.world?.removeRigidBody(d.body); scene.remove(d.obj); d.obj.traverse((o) => { if (o.isMesh) o.geometry.dispose(); }); };
   game.addDebris = (obj, half, v, mass, opts = {}) => {
     const p = obj.position, q = obj.quaternion;
     const body = game.world.createRigidBody(
@@ -308,6 +354,7 @@ async function main() {
     c.syncVisual();
     disposeCar(old);
     if (old === player) { player = c; if (playerAuto) playerAuto.car = c; if (audio?.engine) { /* Klang liest das Auto jedes Bild neu */ } }
+    if (state.spectate === old) state.spectate = c;
     for (const b of bots) if (b.car === old) { b.car = c; b.driver.car = c; }
     if (race) { const e = race.entryOf(old); if (e) e.car = c; }
     if (items) for (const rk of items.rockets) if (rk.target === old) rk.target = c;
@@ -505,7 +552,7 @@ async function main() {
     switch (e.code) {
       case 'KeyE': case 'ShiftLeft': case 'ShiftRight': useItem(); break;
       case 'KeyR': resetPlayer(); break;
-      case 'KeyF': if (state.mode !== 'race') { if (state.mode === 'lab' && !state.labDrive) { spawnLabCar(); } else rebuildCar(player); toast('Repariert', 'good'); } break;
+      case 'KeyF': if (state.mode !== 'race' && player) { if (state.mode === 'lab' && !state.labDrive) { spawnLabCar(); } else rebuildCar(player); toast('Repariert', 'good'); } break;
       case 'KeyC': state.cam = (state.cam + 1) % 3; break;
       case 'KeyN': if (state.mode === 'arena') resetArena(); break;
       case 'KeyT': if (state.mode === 'lab' || state.mode === 'free' || state.mode === 'arena') setSlowmo(state.timeScale === 1); break;
@@ -604,6 +651,86 @@ async function main() {
     clearTimeout(bigT);
     bigT = setTimeout(() => el.classList.add('off'), dur * 1000);
   }
+  // ---- Coins: Zähler oben, fliegende Münzen beim Verdienen und Ausgeben
+  const coinUi = { shown: prog.coins, anim: 0 };
+  const fmtC = (n) => Math.round(n).toLocaleString('de-DE');
+  function renderCoins() { $('coinVal').textContent = fmtC(coinUi.shown); }
+  renderCoins();
+  const pulse = (el, cls) => { el.classList.remove(cls); void el.offsetWidth; el.classList.add(cls); };
+  const center = (el) => { const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; };
+  // n Münzen fliegen im Bogen von einem Element zum anderen
+  function coinFlight(fromEl, toEl, n, onHit, onDone) {
+    const a = center(fromEl), b = center(toEl), s = parseFloat(document.documentElement.style.getPropertyValue('--s')) || 1, sz = 42 * s;
+    let left = n;
+    for (let i = 0; i < n; i++) {
+      const el = document.createElement('div');
+      el.className = 'coinFx'; el.innerHTML = UI_ICONS.coin;
+      document.body.appendChild(el);
+      const sx = a.x + (Math.random() - 0.5) * 90 * s, sy = a.y + (Math.random() - 0.5) * 50 * s;
+      const mx = (sx + b.x) / 2 + (Math.random() - 0.5) * 300 * s, my = Math.min(sy, b.y) - (90 + Math.random() * 170) * s;
+      const kf = [];
+      for (let k = 0; k <= 14; k++) {
+        const t = k / 14, u = 1 - t;
+        const x = u * u * sx + 2 * u * t * mx + t * t * b.x, y = u * u * sy + 2 * u * t * my + t * t * b.y;
+        const sc = t < 0.18 ? 0.3 + t * 4.2 : 1.05 - t * 0.4;
+        kf.push({ transform: `translate(${(x - sz / 2).toFixed(1)}px, ${(y - sz / 2).toFixed(1)}px) scale(${sc.toFixed(3)}) rotate(${Math.round(t * 600)}deg)`, opacity: t < 0.04 ? 0 : 1 });
+      }
+      const an = el.animate(kf, { duration: 620 + Math.random() * 260, delay: i * 50, easing: 'cubic-bezier(.4,.1,.6,1)', fill: 'both' });
+      an.onfinish = () => { el.remove(); onHit?.(); if (--left === 0) onDone?.(); };
+    }
+  }
+  function tweenCoins(to, ms = 650) {
+    const from = coinUi.shown, t0 = performance.now(), id = ++coinUi.anim;
+    const step = (now) => { if (id !== coinUi.anim) return; const k = Math.min(1, (now - t0) / ms); coinUi.shown = from + (to - from) * (1 - Math.pow(1 - k, 3)); renderCoins(); if (k < 1) requestAnimationFrame(step); };
+    requestAnimationFrame(step);
+  }
+  // Verdient (schon gutgeschrieben): Münzen fliegen zum Zähler, der hochzählt
+  function gainFx(amount, fromEl) {
+    const end = prog.coins, start = end - amount, id = ++coinUi.anim;
+    const n = clamp(Math.round(amount / 12), 6, 24);
+    let hits = 0;
+    coinUi.shown = start; renderCoins();
+    coinFlight(fromEl, $('coinPill'), n, () => {
+      if (id !== coinUi.anim) return;
+      hits++; coinUi.shown = start + (amount * hits) / n; renderCoins(); pulse($('coinPill'), 'bump'); audio?.sfx('tick');
+    }, () => { if (id === coinUi.anim) { coinUi.shown = end; renderCoins(); } audio?.sfx('got'); });
+  }
+  // Ausgegeben: Zähler zählt runter, Münzen fliegen zum gekauften Ding
+  function payFx(price, toEl) {
+    tweenCoins(prog.coins, 700);
+    pulse($('coinPill'), 'spend');
+    coinFlight($('coinPill'), toEl, clamp(Math.round(price / 200), 5, 16), () => audio?.sfx('tick'), () => audio?.sfx('repair'));
+  }
+  function countUp(el, to, ms) {
+    const t0 = performance.now();
+    const f = (now) => { const k = Math.min(1, (now - t0) / ms); el.textContent = '+' + fmtC(to * (1 - Math.pow(1 - k, 3))); if (k < 1) requestAnimationFrame(f); };
+    requestAnimationFrame(f);
+  }
+  // Kaufen: erster Klick fragt nach, zweiter Klick (innerhalb 3,5 s) kauft. Liefert true | 'ask' | false
+  const pending = { key: '', t: 0 };
+  const isPending = (key) => pending.key === key && performance.now() - pending.t < 3500;
+  function tryBuy(what, key, el, price, onBought) {
+    if (prog.coins < price) { toast(`Dir fehlen noch ${fmtC(price - prog.coins)} Coins`, 'bad'); audio?.sfx('error'); pulse($('coinPill'), 'spend'); return false; }
+    if (!isPending(key)) {
+      pending.key = key; pending.t = performance.now(); audio?.sfx('tick');
+      setTimeout(() => { if (pending.key === key && !isPending(key)) { pending.key = ''; refreshProgUi(); } }, 3600);
+      return 'ask';
+    }
+    pending.key = '';
+    if (buyThing(prog, what) == null) return false;
+    saveProg();
+    payFx(price, el);
+    onBought?.();
+    return true;
+  }
+  function refreshProgUi() {
+    renderDriver();
+    if (state.screen === 'garage') renderCarInfo();
+    else if (state.screen === 'tuning') renderTune();
+    else if (state.screen === 'sp') renderSp();
+    else if (state.screen === 'settings') renderSettings();
+  }
+
   const ui = () => audio?.ui();
   for (const b of $$('button')) b.addEventListener('click', () => { if (audio) ui(); });
 
@@ -703,6 +830,13 @@ async function main() {
     $('trPrev').disabled = $('trNext').disabled = arena;
     if (sp.mode === 'derby' && sp.level !== 0) { sp.level = 0; return renderSp(); }
     $('trCard').style.opacity = arena ? 0.55 : 1;
+    // gesperrte Strecke: Schloss + Preis, START wird zu KAUFEN
+    const locked = !arena && !ownsLevel(prog, id), price = levelPrice(id), ask = locked && isPending('level:' + id);
+    $('trCard').classList.toggle('locked', locked);
+    let tag = $('trCard').querySelector('.lockTag');
+    if (locked) { if (!tag) { tag = document.createElement('div'); tag.className = 'lockTag'; $('trCard').appendChild(tag); } tag.innerHTML = `<span class="ic">${UI_ICONS.lock}</span>${fmtC(price)}`; } else tag?.remove();
+    $('spStart').classList.toggle('buy', locked); $('spStart').classList.toggle('confirm', ask);
+    $('spStart').innerHTML = !locked ? '<span>START</span>' : ask ? `<span>SICHER? ${fmtC(price)}</span>` : `<span class="ic">${UI_ICONS.coin}</span><span>KAUFEN ${fmtC(price)}</span>`;
     cfg.sp = { ...sp }; persist();
     if (state.screen === 'lobby') mpSendSettings();
   }
@@ -721,7 +855,15 @@ async function main() {
   $$('#segItems button, #segItems2 button').forEach((b) => (b.onclick = () => { sp.items = b.dataset.v === '1'; renderSp(); }));
   $('spBack').onclick = () => showScreen('menu');
   $('spGarage').onclick = () => openGarage('sp');
-  $('spStart').onclick = () => startFromSp();
+  $('spStart').onclick = () => {
+    const id = LEVEL_ORDER[sp.level];
+    if (['race', 'elim', 'free'].includes(sp.mode) && !ownsLevel(prog, id)) {
+      tryBuy({ kind: 'level', id }, 'level:' + id, $('spStart'), levelPrice(id), () => { toast(`${LEVELS[id].name} freigeschaltet!`, 'gold'); pulse($('trCard'), 'bought'); });
+      renderSp();
+      return;
+    }
+    startFromSp();
+  };
   function startFromSp() {
     const id = LEVEL_ORDER[sp.level];
     if (sp.mode === 'race') startRace({ mode: 'race', level: id, laps: sp.laps, skill: sp.skill, items: sp.items, opponents: sp.bots, cls: sp.cls });
@@ -804,7 +946,7 @@ async function main() {
     toast('Kein Spielserver erreichbar – Raum nur mit Bots', 'bad');
     lobby.code = Array.from({ length: 5 }, () => CODE_CH[Math.floor(Math.random() * CODE_CH.length)]).join('');
     lobby.bots = [];
-    lobby.level = sp.level;
+    lobby.level = ownsLevel(prog, LEVEL_ORDER[sp.level]) ? sp.level : 0;
     renderLobby();
     state.menuReturn = 'lobby';
     showScreen('lobby');
@@ -879,8 +1021,10 @@ async function main() {
     if (Object.keys(want).some((k) => want[k] !== cur[k])) mp.net.send('settings', want);
   }
   const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  $('lbPrev').onclick = () => { lobby.level = (lobby.level + LEVEL_ORDER.length - 1) % LEVEL_ORDER.length; mpSendSettings(); renderLobby(); };
-  $('lbNext').onclick = () => { lobby.level = (lobby.level + 1) % LEVEL_ORDER.length; mpSendSettings(); renderLobby(); };
+  // nur gekaufte Strecken (Mitfahrer dürfen jede Strecke des Gastgebers fahren)
+  const nextOwnedLevel = (from, dir) => { let i = from; for (let k = 0; k < LEVEL_ORDER.length; k++) { i = (i + dir + LEVEL_ORDER.length) % LEVEL_ORDER.length; if (ownsLevel(prog, LEVEL_ORDER[i])) return i; } return from; };
+  $('lbPrev').onclick = () => { lobby.level = nextOwnedLevel(lobby.level, -1); mpSendSettings(); renderLobby(); };
+  $('lbNext').onclick = () => { lobby.level = nextOwnedLevel(lobby.level, 1); mpSendSettings(); renderLobby(); };
   $('lbMode').onclick = () => { const M = ['race', 'elim', 'derby', 'free']; lobby.mode = M[(M.indexOf(lobby.mode) + 1) % M.length]; mpSendSettings(); renderLobby(); };
   $$('#segCls2 button').forEach((b) => (b.onclick = () => { lobby.cls = b.dataset.v; mpSendSettings(); renderLobby(); }));
   $('lbCustom').onclick = () => $('lbSettings').classList.toggle('hidden');
@@ -910,16 +1054,17 @@ async function main() {
 
   // ---- Info-Panels
   function openInfo(kind) {
+    state.infoFrom = state.screen;
     const body = $('infoBody');
     if (kind === 'items') {
       $('infoTitle').textContent = 'POWER-UPS';
       $('infoSub').textContent = 'Fahr durch eine ?-Kiste und drück E (Gamepad: X oder RB)';
       body.innerHTML = `<div class="itemGrid">${ITEM_ORDER.map((k) => `<div><i>${ITEM_ICONS[k]}</i><span><b>${ITEMS[k].name}</b>${ITEMS[k].hint}</span></div>`).join('')}</div>
-        <div class="modeInfo">Vorne bekommst du eher Verteidigung (Ölfleck, Sprengfass), hinten eher Aufholhilfen (Nitro, Rakete). Ist dein Auto stark beschädigt, kommt öfter die Reparatur.</div>`;
+        <div class="modeInfo">Vorne bekommst du eher Verteidigung (Ölfleck, Sprengfass), hinten eher Aufholhilfen: als Letzter ist etwa jedes vierte Power-up eine Rakete und jedes vierte Nitro. Ist dein Auto stark beschädigt, kommt öfter die Reparatur – nur im Derby nie.</div>`;
     } else if (kind === 'tracks') {
       $('infoTitle').textContent = 'STRECKEN';
       $('infoSub').textContent = 'Klick auf eine Strecke, um direkt loszulegen';
-      body.innerHTML = `<div class="trackList">${LEVEL_ORDER.map((id, k) => `<div class="trackCard" data-tr="${k}" style="background:linear-gradient(135deg, ${LEVELS[id].card[0]}, ${LEVELS[id].card[1]})"><canvas width="360" height="244"></canvas><div><h3>${LEVELS[id].name}</h3><div class="sub">${LEVELS[id].sub}</div><div class="facts">${trackFacts(id)}</div></div></div>`).join('')}</div>`;
+      body.innerHTML = `<div class="trackList">${LEVEL_ORDER.map((id, k) => `<div class="trackCard ${ownsLevel(prog, id) ? '' : 'locked'}" data-tr="${k}" style="background:linear-gradient(135deg, ${LEVELS[id].card[0]}, ${LEVELS[id].card[1]})">${ownsLevel(prog, id) ? '' : `<div class="lockTag"><span class="ic">${UI_ICONS.lock}</span>${fmtC(levelPrice(id))}</div>`}<canvas width="360" height="244"></canvas><div><h3>${LEVELS[id].name}</h3><div class="sub">${LEVELS[id].sub}</div><div class="facts">${trackFacts(id)}</div></div></div>`).join('')}</div>`;
       $$('[data-tr]').forEach((el) => { drawTrack(el.querySelector('canvas'), LEVEL_ORDER[Number(el.dataset.tr)]); el.onclick = () => { sp.level = Number(el.dataset.tr); sp.mode = 'race'; openSp(); }; });
     } else {
       $('infoTitle').textContent = 'STEUERUNG';
@@ -944,7 +1089,7 @@ async function main() {
     }
     showScreen('info');
   }
-  $('infoBack').onclick = () => showScreen(state.menuReturn === 'lobby' ? 'lobby' : state.mode !== 'menu' && state.paused ? 'pause' : 'menu');
+  $('infoBack').onclick = () => showScreen(state.infoFrom === 'pause' ? 'pause' : state.menuReturn === 'lobby' ? 'lobby' : 'menu');
 
   // ---- Einstellungen
   function renderSettings() {
@@ -953,6 +1098,14 @@ async function main() {
     $$('#segCam button').forEach((b) => b.classList.toggle('on', Number(b.dataset.v) === Number(cfg.cam)));
     $$('#segShake button').forEach((b) => b.classList.toggle('on', Number(b.dataset.v) === Number(cfg.shake)));
     $$('#segKeys button').forEach((b) => b.classList.toggle('on', Number(b.dataset.v) === Number(cfg.keys)));
+    $('saveCode').textContent = fmtKey(cfg.saveKey);
+    renderSaveState();
+  }
+  const fmtKey = (k) => k.replace(/(.{4})(?=.)/g, '$1-');
+  function renderSaveState() {
+    $('saveState').textContent = cloud.state === 'ok' ? `✓ Auf dem Spielserver gespeichert · ${fmtC(prog.coins)} Coins · ${prog.cars.length} Autos · ${prog.levels.length} Strecken`
+      : cloud.state === 'offline' ? 'Spielserver gerade nicht erreichbar – dein Spielstand liegt erst mal nur in diesem Browser.'
+      : 'Spielstand wird mit dem Server abgeglichen …';
   }
   function openSettings() { renderSettings(); showScreen('settings'); }
   $('setBack').onclick = () => showScreen('menu');
@@ -964,6 +1117,19 @@ async function main() {
   $('setServer').value = cfg.server || '';
   $('setServer').onkeydown = (e) => e.stopPropagation();
   $('setServer').onchange = (e) => { cfg.server = e.target.value.trim(); persist(); netLeave(); toast(cfg.server ? 'Server gespeichert' : 'Server: automatisch'); };
+  $('saveCopy').onclick = async () => toast((await copyText(fmtKey(cfg.saveKey))) ? 'Code kopiert – gib ihn auf dem anderen PC unter Einstellungen ein' : `Dein Code: ${fmtKey(cfg.saveKey)}`, 'gold');
+  $('saveIn').onkeydown = (e) => { e.stopPropagation(); if (e.key === 'Enter') $('saveLoad').onclick(); };
+  $('saveLoad').onclick = async () => {
+    const key = $('saveIn').value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (!KEY_RE.test(key)) { toast('Der Code hat 12 Zeichen, z. B. ABCD-EFGH-JKLM', 'bad'); audio?.sfx('error'); return; }
+    if (key === cfg.saveKey) { toast('Das ist schon dein Code'); return; }
+    const r = await cloudCall({ key });
+    if (!r) { toast('Spielserver nicht erreichbar', 'bad'); return; }
+    if (!r.data) { toast('Zu diesem Code gibt es keinen Spielstand', 'bad'); audio?.sfx('error'); return; }
+    cfg.saveKey = key; persist();
+    $('saveIn').value = '';
+    adoptProg(r.data, 'Spielstand geladen!');
+  };
   function applyHudPrefs() { $('hudKeys').classList.toggle('hidden', !cfg.keys); }
   applyHudPrefs();
 
@@ -977,7 +1143,13 @@ async function main() {
     const t = curTune(), pi = perfIndex(c, t), st = pi.stats;
     const bars = [['Topspeed', st.speed, c.stats.speed], ['Beschleunigung', st.accel, c.stats.accel], ['Handling', st.handling, c.stats.handling], ['Panzerung', st.armor, c.stats.armor]];
     $('carStats').innerHTML = bars.map(([l, v, v0]) => `<div class="stat"><span>${l}</span><i><b class="${v > v0 + 0.004 ? 'up' : ''}" style="width:${Math.round(clamp(v, 0, 1) * 100)}%"></b></i></div>`).join('');
-    $('carClass').innerHTML = `<span class="clsBadge" style="--cc:${pi.cls.color}"><b>${pi.cls.id}</b>${pi.pi} PI</span>${isStock(t) ? '' : '<span class="tunedTag">● Getunt</span>'}`;
+    const owned = ownsCar(prog, id), price = carPrice(id), ask = !owned && isPending('car:' + id);
+    $('carIdx').textContent = `${sel.idx + 1} / ${CAR_ORDER.length}${owned ? '' : ' · nicht gekauft'}`;
+    $('carClass').innerHTML = `<span class="clsBadge" style="--cc:${pi.cls.color}"><b>${pi.cls.id}</b>${pi.pi} PI</span>${owned ? (isStock(t) ? '' : '<span class="tunedTag">● Getunt</span>') : `<span class="carLock"><span class="ic">${UI_ICONS.lock}</span>${fmtC(price)} Coins</span>`}`;
+    const go = $('garageGo');
+    go.classList.toggle('buy', !owned); go.classList.toggle('confirm', ask);
+    go.innerHTML = owned ? '<span>AUSWÄHLEN</span>' : ask ? `<span>SICHER? ${fmtC(price)}</span>` : `<span class="ic">${UI_ICONS.coin}</span><span>KAUFEN ${fmtC(price)}</span>`;
+    $('gTune').disabled = !owned;
     const sw = $('colors');
     sw.innerHTML = '';
     for (const col of c.colors) {
@@ -995,10 +1167,11 @@ async function main() {
     }
     $('soundSel').innerHTML = SOUNDS.map(([sid, label]) => `<option value="${sid}" ${sel.sounds[id] === sid ? 'selected' : ''}>${label}</option>`).join('');
   }
-  const saveCar = () => { cfg.car = { idx: sel.idx, colors: sel.colors, sounds: sel.sounds }; persist(); renderDriver(); };
+  const saveCar = () => { cfg.car = { idx: ownsCar(prog, selId()) ? sel.idx : sel.lastOwned ?? 0, colors: sel.colors, sounds: sel.sounds }; persist(); renderDriver(); };
   function switchCar(dir) {
     if (slide) return;
     sel.idx = (sel.idx + dir + CAR_ORDER.length) % CAR_ORDER.length;
+    if (ownsCar(prog, selId())) sel.lastOwned = sel.idx;
     outgoing = showModel;
     showModel = makeShowModel(selId(), sel.colors[selId()]);
     turntable.add(showModel);
@@ -1007,13 +1180,24 @@ async function main() {
   }
   function openGarage(from) { garageFrom = from; renderCarInfo(); showScreen('garage'); }
   function closeGarage() {
+    if (!ownsCar(prog, selId())) {
+      if (slide) { if (outgoing) turntable.remove(outgoing); outgoing = null; showModel.position.set(0, 0, 0); slide = null; }
+      sel.idx = sel.lastOwned ?? CAR_ORDER.indexOf(FREE_CAR);
+      rebuildShowModel();
+      toast(`Noch nicht gekauft – du fährst weiter ${CARS[selId()].name}`);
+    }
     saveCar();
     if (garageFrom === 'sp') { renderSp(); showScreen('sp'); }
     else if (garageFrom === 'lobby') { if (mp.online) mp.net?.send('profile', profile()); renderLobby(); showScreen('lobby'); }
     else showScreen('menu');
   }
   $('gBack').onclick = closeGarage;
-  $('garageGo').onclick = closeGarage;
+  $('garageGo').onclick = () => {
+    const id = selId();
+    if (ownsCar(prog, id)) { closeGarage(); return; }
+    tryBuy({ kind: 'car', id }, 'car:' + id, $('garageGo'), carPrice(id), () => { sel.lastOwned = sel.idx; saveCar(); toast(`${CARS[id].name} gehört jetzt dir!`, 'gold'); });
+    renderCarInfo();
+  };
   $('prevCar').onclick = () => switchCar(-1);
   $('nextCar').onclick = () => switchCar(1);
   $('soundSel').onchange = (e) => { sel.sounds[selId()] = e.target.value; saveCar(); previewSound(); };
@@ -1078,11 +1262,23 @@ async function main() {
       const HD = { classic: 'Zweiklang wie früher – laut und ehrlich', high: 'Hell und frech, wie aus Tokio', sport: 'Dreiklang-Fanfare für den großen Auftritt', truck: 'Tiefe Druckluft-Hörner vom Sattelschlepper', train: 'Mächtiges Signalhorn – alle springen zur Seite', cucaracha: 'Spielt La Cucaracha' };
       cards = Object.entries(HORNS).map(([hid, H], k) => ({ v: hid, on: (t.horn || def) === hid, lv: (k % 3) + 1, name: H.label + (hid === def ? ' · Serie' : ''), desc: HD[hid] || 'Fanfare', chips: [], icon: 'horn', play: true }));
     } else cards = PARTS[cat].levels.map((L, k) => ({ v: k, on: t[cat] === k, lv: k, name: L.name, desc: L.desc, chips: partChips(cat, k, id) }));
-    $('tList').innerHTML = cards.map((c, i) => `<button class="tCard ${c.on ? 'on' : ''}" data-tv="${c.v}"><div class="lv l${c.lv}">${c.icon ? UI_ICONS[c.icon] : LV_TXT[c.lv]}</div><div class="nm">${c.name}</div><div class="ds">${c.desc}</div>${c.chips.length ? `<div class="fx">${c.chips.map(([tx, cl]) => `<span class="chip ${cl}">${tx}</span>`).join('')}</div>` : ''}${c.play ? `<span class="btn blue play" data-play="${c.v}"><span class="ic">${UI_ICONS.play || ''}</span></span>` : ''}</button>`).join('');
+    // gekauft / kaufbar / gesperrt (Stufen der Reihe nach)
+    const stOf = (v) => (cat === 'horn' && v === CARS[id].horn ? 'own' : partState(prog, id, cat, v));
+    const badge = (c, st) => {
+      if (st === 'buy') return `<span class="price">${isPending(`part:${id}:${cat}:${c.v}`) ? '<span style="padding-left:7px">KAUFEN?</span>' : `<span class="ic">${UI_ICONS.coin}</span>${fmtC(partPrice(cat, c.v))}`}</span>`;
+      if (st === 'lock') return `<span class="price"><span class="ic">${UI_ICONS.lock}</span>erst ${LV_TXT[c.v - 1]}</span>`;
+      return '';
+    };
+    $('tList').innerHTML = cards.map((c) => { const st = stOf(c.v), ask = st === 'buy' && isPending(`part:${id}:${cat}:${c.v}`); return `<button class="tCard ${c.on ? 'on' : ''} ${st === 'own' ? '' : st} ${ask ? 'confirm' : ''}" data-tv="${c.v}"><div class="lv l${c.lv}">${c.icon ? UI_ICONS[c.icon] : LV_TXT[c.lv]}</div><div class="nm">${c.name}</div><div class="ds">${c.desc}</div>${c.chips.length ? `<div class="fx">${c.chips.map(([tx, cl]) => `<span class="chip ${cl}">${tx}</span>`).join('')}</div>` : ''}${badge(c, st)}${c.play ? `<span class="btn blue play" data-play="${c.v}"><span class="ic">${UI_ICONS.play || ''}</span></span>` : ''}</button>`; }).join('');
     $$('#tList [data-tv]').forEach((b) => (b.onclick = (e) => {
       if (e.target.closest('[data-play]')) { playHornPreview(e.target.closest('[data-play]').dataset.play); return; }
-      const raw = b.dataset.tv, v = cat === 'tires' || cat === 'horn' ? raw : Number(raw);
-      setTunePart(cat, v);
+      const raw = b.dataset.tv, v = cat === 'tires' || cat === 'horn' ? raw : Number(raw), st = stOf(v);
+      if (st === 'lock') { toast(`Erst ${PARTS[cat].levels[v - 1].name.replace(/ · .*/, '')} kaufen`, 'bad'); audio?.sfx('error'); return; }
+      if (st === 'buy') {
+        const r = tryBuy({ kind: 'part', car: id, cat, v }, `part:${id}:${cat}:${raw}`, b, partPrice(cat, v));
+        if (r !== true) { renderTuneList(); if (r === 'ask' && cat === 'horn') playHornPreview(raw); return; }
+      }
+      setTunePart(cat, v, st === 'buy');
       if (cat === 'horn') playHornPreview(raw);
     }));
   }
@@ -1118,21 +1314,23 @@ async function main() {
     renderTuneCats(); renderTuneList(); renderTuneStats();
     tuneFocus();
   }
-  function setTunePart(cat, v) {
+  function setTunePart(cat, v, bought = false) {
     const id = selId(), t = curTune();
+    if (!ownsCar(prog, id) || partState(prog, id, cat, cat === 'horn' && v === CARS[id].horn ? '' : v) !== 'own') return; // nur Gekauftes einbauen
     if (cat === 'horn') t.horn = v === CARS[id].horn ? '' : v; else t[cat] = v;
     const changed = JSON.stringify(t) !== JSON.stringify(curTune());
     sel.tunes[id] = t;
-    saveCar();
+    saveProg();
     if (changed && cat !== 'horn') {
       rebuildShowModel();
       audio?.sfx(cat === 'engine' ? 'clank' : 'pickup');
       tuneUi.bounce = 0.16; tuneUi.bounceV = 0;
       const nm = cat === 'tires' ? PARTS.tires.options.find((o) => o.id === v).name + '-Reifen' : PARTS[cat].levels[v].name;
-      const el = $('tFlash'); el.textContent = v === 0 || v === 'street' ? 'Serie' : nm.replace(/^Stufe \d · /, '') + ' eingebaut!';
+      const el = $('tFlash'); el.textContent = v === 0 || v === 'street' ? 'Serie' : nm.replace(/^Stufe \d · /, '') + (bought ? ' gekauft!' : ' eingebaut!');
       el.classList.remove('go'); void el.offsetWidth; el.classList.add('go');
     }
     renderTune();
+    if (bought) { const card = $$('#tList [data-tv]').find((x) => x.dataset.tv === String(v)); if (card) pulse(card, 'bought'); }
   }
   function playHornPreview(kind) {
     ensureAudio(false).then(() => {
@@ -1171,7 +1369,7 @@ async function main() {
     tuneUi.from = from;
     tuneUi.userYaw = 0;
     tuneUi.yaw = turntable.rotation.y;
-    if (slide) { if (outgoing) turntable.remove(outgoing); outgoing = null; showModel.position.set(0, 0, 0); slide = null; }
+    if (slide) { if (outgoing) { turntable.remove(outgoing); disposeShow(outgoing); } outgoing = null; showModel.position.set(0, 0, 0); slide = null; }
     showScreen('tuning');
     renderTune();
   }
@@ -1187,7 +1385,7 @@ async function main() {
   $('gTune').onclick = () => openTuning(garageFrom === 'lobby' ? 'lobby' : 'garage');
   $('tBack').onclick = closeTuning;
   $('tDone').onclick = closeTuning;
-  $('tReset').onclick = () => { sel.tunes[selId()] = normTune(null); saveCar(); rebuildShowModel(); audio?.sfx('tick'); renderTune(); };
+  $('tReset').onclick = () => { sel.tunes[selId()] = normTune(null); saveProg(); rebuildShowModel(); audio?.sfx('tick'); renderTune(); };
   // Ziehen dreht das Auto
   renderer.domElement.addEventListener('pointerdown', (e) => { if (state.screen === 'tuning' || state.screen === 'garage') tuneUi.drag = { x: e.clientX }; });
   window.addEventListener('pointermove', (e) => { if (!tuneUi.drag) return; tuneUi.userYaw += (e.clientX - tuneUi.drag.x) * 0.008; if (state.screen === 'garage') turntable.rotation.y += (e.clientX - tuneUi.drag.x) * 0.008; tuneUi.drag.x = e.clientX; });
@@ -1270,6 +1468,7 @@ async function main() {
     state.mode = mode;
     state.snapCam = true;
     state.paused = false;
+    if (state.screen === 'pause') showScreen('hud'); // während des Ladens pausiert (Esc/Fokusverlust)
     state.timeScale = 1;
     state.resultsShown = false;
     playerAuto = null;
@@ -1359,7 +1558,7 @@ async function main() {
   }
 
   async function startArena() {
-    state.lastRace = null;
+    state.lastRace = null; state.classLimit = 'open';
     await ensureAudio(false);
     showScreen('hud');
     await loadLevel('tal');
@@ -1383,7 +1582,7 @@ async function main() {
 
   function spawnLabCar() { spawnPlayerAt(labSpot(), Math.PI / 2); }
   async function startLab() {
-    state.lastRace = null;
+    state.lastRace = null; state.classLimit = 'open';
     await ensureAudio(false);
     showScreen('hud');
     await loadLevel('tal');
@@ -1466,7 +1665,7 @@ async function main() {
   // ------------------------------------------------------------ Rennen: Ereignisse
   let resT = null;
   function useItem() {
-    if (!player || !items || !player.item) return;
+    if (!player || !items || !player.item || player.out) return;
     if (player.itemRoll > 0) return;
     const e = race?.entryOf(player);
     const ahead = e && race.sorted ? race.sorted.find((o) => o.place === e.place - 1)?.car : null;
@@ -1500,7 +1699,7 @@ async function main() {
   // Startplätze im Arena-Ring, Blick zur Mitte
   function derbySlot(k, n) {
     const A = game.track.extras.arena, a = (k / n) * Math.PI * 2 + 0.3;
-    return { pos: new THREE.Vector3(A.x + Math.cos(a) * (A.r - 10), 0, A.z + Math.sin(a) * (A.r - 10)), yaw: Math.PI / 2 - a };
+    return { pos: new THREE.Vector3(A.x + Math.cos(a) * A.r * 0.6, 0, A.z + Math.sin(a) * A.r * 0.6), yaw: Math.PI / 2 - a };
   }
   // Derby: Totalschaden, aus dem Ring oder abgestürzt = raus. Online meldet jeder nur seine Autos.
   function checkDerby() {
@@ -1634,16 +1833,41 @@ async function main() {
       } else if (ev.type === 'oil' && ev.car === player) { audio?.sfx('oil'); toast('Öl! Gegenlenken!', 'bad'); }
       else if (ev.type === 'spiked' && ev.car === player) { audio?.sfx('puncture'); toast('Plattfuß!', 'bad'); }
       else if (ev.type === 'emp' && ev.car === player) { audio?.sfx('powerdown'); toast('EMP – Motor aus!', 'bad'); }
-      else if (ev.type === 'hit' && ev.by === player && ev.car !== player) toast(`Treffer: ${ev.car.name || 'Gegner'}!`, 'good');
-      else if (ev.type === 'hit' && ev.car === player && ev.by && ev.by !== player) toast(`Erwischt von ${ev.by.name || 'Gegner'}!`, 'bad');
+      else if (ev.type === 'stun' && ev.car === player) { bigMsg(`AUSSER GEFECHT!<small>${ev.by && ev.by !== player ? 'Rakete von ' + escapeHtml(ev.by.name || 'Gegner') : 'Rakete!'}</small>`, 'bad', 1.6); audio?.sfx('powerdown'); game.fx.shake = Math.min(1.6, game.fx.shake + 1); }
+      else if (ev.type === 'stun' && ev.by === player) toast(`Volltreffer! ${ev.car.name || 'Gegner'} ist außer Gefecht`, 'good');
+      else if (ev.type === 'hit' && ev.kind !== 'rocket' && ev.by === player && ev.car !== player) toast(`Treffer: ${ev.car.name || 'Gegner'}!`, 'good');
+      else if (ev.type === 'hit' && ev.kind !== 'rocket' && ev.car === player && ev.by && ev.by !== player) toast(`Erwischt von ${ev.by.name || 'Gegner'}!`, 'bad');
     }
     items.events.length = 0;
   }
   function showResults() {
     if (state.resultsShown || state.mode !== 'race') return;
     state.resultsShown = true;
+    payRace();
     renderResults();
     showScreen('results');
+    const rw = race?.reward;
+    if (rw?.coins > 0) {
+      coinUi.anim++; coinUi.shown = prog.coins - rw.coins; renderCoins();
+      pulse($('resCoins'), 'pop');
+      countUp($('resCoinVal'), rw.coins, 800);
+      setTimeout(() => { if (state.screen === 'results') gainFx(rw.coins, $('resCoins')); else { coinUi.shown = prog.coins; renderCoins(); } }, 900);
+    }
+  }
+  // Coins fürs Rennen: Strecke × (Grundbetrag + geschlagene Gegner nach Stärke), Sieg-Bonus. Wird sofort gutgeschrieben.
+  function payRace() {
+    if (!race || race.reward !== undefined) return;
+    race.reward = null;
+    const pe = race.entries.find((e) => e.isPlayer);
+    if (!pe || race.mode !== 'race') return;
+    const tr = game.track, kmPerIdx = tr.length / tr.N / 1000;
+    const km = race.variant === 'derby' ? Math.min(12, ((pe.out ? pe.outTime : race.time) || 0) / 60) * DERBY_KM_PER_MIN
+      : clamp(pe.total, 0, (race.variant === 'race' ? race.laps : 999) * tr.N) * kmPerIdx;
+    const skill = mp.inRace ? mp.raceInfo?.skill : state.lastRace?.skill;
+    const behind = (race.sorted || race.entries).filter((e) => e !== pe && e.place > pe.place).map((e) => (e.remote && !e.isBot ? OPP.human : OPP[skill] ?? OPP.normal));
+    const r = raceReward({ km, place: pe.place, behind });
+    race.reward = { ...r, km, beat: behind.length };
+    if (r.coins > 0) { prog.coins += r.coins; prog.earned += r.coins; saveProg(); }
   }
   function renderResults() {
     if (!race) return;
@@ -1658,6 +1882,13 @@ async function main() {
     $('resTitle').textContent = place === 1 ? 'SIEG!' : place <= 3 ? 'PODIUM!' : place <= res.length / 2 ? 'STARK GEFAHREN!' : 'NÄCHSTES MAL!';
     $('resSub').textContent = race.variant === 'derby' ? `Derby-Arena · Last Man Standing · ${res.length} Fahrer` : race.variant === 'elim' ? `${LEVELS[level.level.id].name} · Ausscheiden · ${res.length} Fahrer` : `${LEVELS[level.level.id].name} · ${race.laps} ${race.laps === 1 ? 'Runde' : 'Runden'} · ${res.length} Fahrer`;
     $('resHead').querySelector('.trophy').style.visibility = place <= 3 ? 'visible' : 'hidden';
+    const rw = race.reward;
+    $('resCoins').classList.toggle('hidden', !rw);
+    if (rw) {
+      const dist = race.variant === 'derby' ? `${(rw.km / DERBY_KM_PER_MIN).toFixed(1).replace('.', ',')} min` : `${rw.km.toFixed(1).replace('.', ',')} km`;
+      $('resCoinVal').textContent = '+' + fmtC(rw.coins);
+      $('resCoinWhy').innerHTML = `<span class="chip b">${dist} +${rw.base}</span>${rw.beaten ? `<span class="chip g">${rw.beat} geschlagen +${rw.beaten}</span>` : ''}${rw.win ? `<span class="chip g">Sieg +${rw.win}</span>` : ''}`;
+    }
     const lead = res[0]?.time || 0;
     $('resTable').innerHTML = `<div class="h"><span>Platz</span><span>Fahrer</span><span>Auto</span><span>Zeit</span><span>Beste Runde</span></div>` +
       res.map((r, k) => `<div class="${r.isPlayer ? 'me' : ''}"><em>${r.place}</em><span class="nm"><i style="background:${r.color}"></i>${escapeHtml(r.name)}</span><span>${r.car}</span><span class="t">${race.variant !== 'race' ? (r.out ? 'raus nach ' + fmt(r.time) : r.fin ? 'Sieger' : 'fährt noch') : k === 0 ? fmt(r.time) : (r.est ? '≈ ' : '') + '+' + (r.time - lead).toFixed(1) + ' s'}</span><span class="t">${fmt(r.best)}</span></div>`).join('');
@@ -1716,7 +1947,7 @@ async function main() {
     mp.net.send('ev', { e: { type: 'imp', id: car.netId, p: [r2(lp.x), r2(lp.y), r2(lp.z)], d: [r2(ld.x), r2(ld.y), r2(ld.z)], s: r2(sp) } });
   }
   async function startNetRace(info) {
-    mp.raceInfo = info; mp.inRace = true; mp.ended = false; mp.goAt = null; mp.warmed = false; mp.waitMsg = '';
+    mp.raceInfo = info; mp.inRace = true; mp.ended = false; mp.goAt = null; mp.warmed = false; mp.waitMsg = ''; mp.earlyCd = null;
     state.lastRace = null;
     state.classLimit = info.cls || 'open';
     clearTimeout(resT);
@@ -1776,6 +2007,7 @@ async function main() {
     mp.warmed = true;
     if (mp.waiting) bigMsg(mp.waitMsg || '<small>Warte auf die anderen Fahrer …</small>', '', 120);
     mp.net?.send('ready', { race: info.id });
+    if (mp.earlyCd) onCountdown(mp.earlyCd); // Server hat nicht länger gewartet: Ampel jetzt nachholen
     clock.getDelta();
   }
   async function warmup() {
@@ -1790,12 +2022,15 @@ async function main() {
     bigMsg(`<small>Warte auf ${n.length > 2 ? n.length + ' Fahrer' : n.join(' und ')} …</small>`, '', 120);
   }
   function onCountdown(m) {
-    if (!race || !mp.inRace) return;
+    if (!mp.inRace) return;
+    // Noch am Laden (Nachzügler, nach 60 s startet der Server ohne ihn): merken statt verlieren
+    if (!mp.warmed) { m.at = performance.now(); mp.earlyCd = m; return; }
+    if (!race) return;
     for (const id of m.gone || []) removeNetCar(id);
     mp.waiting = false;
     $('bigMsg').classList.add('off');
-    // Grün kommt bei allen zur selben Zeit: Restzeit vom Server minus halbe Laufzeit der Nachricht
-    const lead = Math.max(0, ((m.in ?? 5400) - (mp.net?.rtt || 0) / 2) / 1000);
+    // Grün kommt bei allen zur selben Zeit: Restzeit vom Server minus halbe Laufzeit der Nachricht (und Wartezeit beim Nachholen)
+    const lead = Math.max(0, ((m.in ?? 5400) - (mp.net?.rtt || 0) / 2 - (m.at ? performance.now() - m.at : 0)) / 1000);
     if (race.mode === 'race') {
       mp.goAt = performance.now() + lead * 1000;
       const intro = Math.max(0, lead - 3);
@@ -1899,6 +2134,7 @@ async function main() {
     if (e) race.remove(e);
     disposeCar(g.car);
     mp.ghosts.delete(id);
+    audio?.hornStop(id); // ging mit gedrückter Hupe: das "aus" kommt nie
   }
   function onLeft(m) {
     if (!mp.inRace || !race) return;
@@ -2168,7 +2404,7 @@ async function main() {
         const toLocal = (x) => new THREE.Vector3(x, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), -tr);
         if (outgoing) outgoing.position.copy(toLocal(-slide.dir * 12 * e));
         showModel.position.copy(toLocal(slide.dir * 12 * (1 - e)));
-        if (slide.t >= 1) { if (outgoing) turntable.remove(outgoing); outgoing = null; showModel.position.set(0, 0, 0); slide = null; }
+        if (slide.t >= 1) { if (outgoing) { turntable.remove(outgoing); disposeShow(outgoing); } outgoing = null; showModel.position.set(0, 0, 0); slide = null; }
       }
       composer.render();
       return;
@@ -2316,7 +2552,7 @@ async function main() {
 
     updateCamera(rdt);
     {
-      const dn = items && driving() ? Math.min(1, items.smokeAt(camera.position) * 1.3) : 0;
+      const dn = items && driving() ? Math.min(1, items.smokeAt(camera.position, player) * 1.3) : 0;
       state.veil = (state.veil || 0) + (dn - (state.veil || 0)) * Math.min(1, rdt * 6);
       $('smokeVeil').style.opacity = state.veil > 0.01 ? state.veil.toFixed(3) : '0';
     }
@@ -2340,6 +2576,13 @@ async function main() {
   await loadLevel('tal');
   startAttract();
   showScreen('menu');
+  // Spielstand: neueren vom Server übernehmen, sonst den eigenen hochladen
+  cloudCall({ key: cfg.saveKey }).then((r) => {
+    if (!r) setCloud('offline');
+    else if (r.data && (r.data.rev | 0) > prog.rev) adoptProg(r.data);
+    else if (!r.data || prog.rev > (r.data.rev | 0)) cloudPush();
+    else setCloud('ok');
+  });
   // Einladungslink: ?raum=CODE öffnet direkt den Beitritt
   const invite = new URLSearchParams(location.search).get('raum');
   if (invite && /^[A-Za-z0-9]{5}$/.test(invite)) openMp(invite.toUpperCase());
@@ -2348,7 +2591,7 @@ async function main() {
     fireRam, startRace, startLab, startArena, goMenu, switchCar, openSp, openMp, createRoom, openGarage, openInfo, openSettings, showResults, keys, ctl, setPause,
     bots: () => bots, setSlowmo, useItem, mp,
     autopilot: (skill = 'profi') => { playerAuto = race?.variant === 'derby' ? new DerbyDriver(player, game.track.extras.arena, skill, 0.3) : new BotDriver(player, game.track, skill, 0.3); },
-    openTuning, closeTuning, setTunePart, get tuneUi() { return tuneUi; },
+    openTuning, closeTuning, setTunePart, get tuneUi() { return tuneUi; }, get prog() { return prog; }, saveProg, refreshProgUi,
     set simMul(v) { state.simMul = v; },
   };
   requestAnimationFrame(frame);

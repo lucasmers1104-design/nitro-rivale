@@ -32,3 +32,15 @@ for (const id of LEVEL_ORDER) {
   console.log(`${id}: Bauzeit ${ms.toFixed(0)} ms, Objekte ${objs}, Kollider ${world.colliders.len()}, Höhe Straße ${Math.min(...ys).toFixed(1)}..${Math.max(...ys).toFixed(1)} m, Gelände-Abweichung max ${maxErr.toFixed(3)} / Ø ${(sumErr / n).toFixed(4)} m, auf der Straße max ${maxRoad.toFixed(3)} m`);
   L.dispose(); world.free();
 }
+// Auto entfernen gibt Geometrien + Materialien frei (sonst Speicherleck bei jedem Rennen/Streckenwechsel)
+{
+  const { Car } = await import('./src/car.js');
+  const { CARS } = await import('./src/presets.js');
+  const world = new RAPIER.World({ x: 0, y: -13.2, z: 0 });
+  const car = new Car({ RAPIER, world, scene: new THREE.Scene(), gravity: 13.2, owners: new Map(), envMap: null }, CARS.vipera, 0xff0000, { ai: true });
+  const res = new Set(), freed = new Set();
+  car.root.traverse((o) => { if (o.isMesh) res.add(o.geometry); for (const m of [].concat(o.material || [])) res.add(m); });
+  for (const r of res) r.addEventListener('dispose', () => freed.add(r));
+  car.dispose(); world.free();
+  console.log(`${freed.size === res.size ? '✓' : '✗'} Auto entfernen: ${freed.size}/${res.size} Geometrien+Materialien freigegeben`);
+}

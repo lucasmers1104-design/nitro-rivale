@@ -5,7 +5,7 @@ globalThis.document = { createElement: () => ({ getContext: () => null, width: 0
 const { buildWorld, gridSlot } = await import('./src/world.js');
 const { Car } = await import('./src/car.js');
 const { CARS } = await import('./src/presets.js');
-const { Items } = await import('./src/items.js');
+const { Items, itemWeights } = await import('./src/items.js');
 await RAPIER.init();
 const noop = () => {};
 function setup(n = 2) {
@@ -92,4 +92,41 @@ const drive = (c, thr = 1) => (c.input = { throttle: thr, brake: 0, steer: 0, ha
   const passed = new THREE.Vector3().subVectors(pos(b), pos(a)).dot(fwd) > 0;
   ok(b.ghostOn && passed && pushed < 1.0, `Geist: durchgefahren ${passed ? 'ja' : 'nein'}, anderes Auto verschoben um ${pushed.toFixed(2)} m, kleinster Abstand ${minD.toFixed(1)} m`);
   step(S, 4, () => drive(b, 0)); ok(!b.ghostOn, 'Geist: nach Ablauf wieder fest'); }
+// Wegräumen gibt Geometrien frei: Explosionsring, abgelaufenes Nagelband, Fass beim Rennende
+{ const S = setup(1); const [a] = S.cars;
+  S.items.flash(pos(a), 0xff8a2a, 3); a.item = 'spikes'; S.items.use(a); a.item = 'barrel'; S.items.use(a);
+  const geos = new Set(), freed = new Set();
+  S.items.rings[0].mesh.traverse((o) => o.geometry && geos.add(o.geometry));
+  for (const h of S.items.hazards) h.mesh.traverse((o) => o.geometry && geos.add(o.geometry));
+  for (const g of geos) g.addEventListener('dispose', () => freed.add(g));
+  S.items.hazards.find((h) => h.type === 'spikes').life = 0.5;
+  step(S, 1); S.items.dispose();
+  ok(freed.size === geos.size, `Power-up-Reste freigegeben: ${freed.size}/${geos.size} Geometrien`); }
+// Power-ups aus: update/dispose dürfen nicht abstürzen
+{ const S = setup(1); S.items.dispose(); S.items = new Items(S.g, S.L.track, { enabled: false });
+  let err = null; try { step(S, 0.2); S.items.dispose(); } catch (e) { err = e.message; }
+  ok(!err, `Power-ups aus: Rennen läuft ${err ? '– Fehler: ' + err : 'ohne Fehler'}`); }
+// Rakete: viel Schaden + kurz außer Gefecht
+{ const S = setup(2); const [a, b] = S.cars;  // a vorne, b feuert von hinten
+  step(S, 0.5);
+  const hp0 = a.bodyHp; b.item = 'rocket'; S.items.use(b, a);
+  let stun = 0; step(S, 2, () => { drive(a); stun = Math.max(stun, a.stunT); });
+  ok(stun > 1.2 && a.bodyHp < hp0 - 30, `Rakete: außer Gefecht ${stun.toFixed(1)} s, Karosserie ${hp0.toFixed(0)} → ${a.bodyHp.toFixed(0)}`);
+  a.stunT = 1; const v0 = a.speedMs; step(S, 0.8, () => drive(a)); ok(a.speedMs <= v0 + 0.5, `Rakete: kein Gas solange außer Gefecht (${(v0 * 3.6).toFixed(0)} → ${(a.speedMs * 3.6).toFixed(0)} km/h)`); }
+// Nebelwand: der eigene Rauch stört die eigene Sicht nicht
+{ const S = setup(1); const [a] = S.cars; step(S, 1, () => drive(a));
+  a.item = 'smoke'; S.items.use(a); step(S, 1.2, () => drive(a));
+  const cam = pos(a).add(new THREE.Vector3(0, 2, 7).applyQuaternion(a.root.quaternion));
+  const others = S.items.smokeAt(cam), mine = S.items.smokeAt(cam, a);
+  S.items.smokeWall.update(0, cam, a);
+  const m = new THREE.Matrix4(), pp = new THREE.Vector3();
+  let near = 0, shown = 0; for (let k = 0; k < S.items.smokeWall.mesh.count; k++) { S.items.smokeWall.mesh.getMatrixAt(k, m); pp.setFromMatrixPosition(m); if (pp.distanceTo(cam) < 4) { near++; shown += Math.hypot(m.elements[0], m.elements[1], m.elements[2]) > 0.01 ? 1 : 0; } }
+  ok(mine === 0 && shown === 0, `Nebelwand: eigener Schleier ${mine.toFixed(2)} (für Verfolger ${others.toFixed(2)}), ${near} Wolken direkt vor der Kamera, davon sichtbar ${shown}`); }
+// Wahrscheinlichkeiten nach Platz
+{ const share = (w, k) => (w[k] || 0) / Object.values(w).reduce((x, y) => x + y, 0);
+  const last = itemWeights(1), first = itemWeights(0), mid = itemWeights(0.5);
+  ok(share(last, 'rocket') >= 0.2 && share(last, 'nitro') >= 0.2 && !first.rocket && share(mid, 'rocket') > 0 && share(mid, 'rocket') < share(last, 'rocket'),
+    `Power-ups nach Platz: Letzter Rakete ${(share(last, 'rocket') * 100).toFixed(0)} %, Nitro ${(share(last, 'nitro') * 100).toFixed(0)} % · Mitte Rakete ${(share(mid, 'rocket') * 100).toFixed(0)} % · Erster Rakete 0 %`);
+  ok(!itemWeights(1, { derby: true, hurt: true }).repair && itemWeights(1, { hurt: true }).repair > 3, 'Derby: keine Reparatur, sonst bei Schaden öfter'); }
 console.log(out.join('\n'));
+process.exit(out.some((l) => l.startsWith('✗')) ? 1 : 0);

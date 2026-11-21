@@ -14,6 +14,8 @@ export const RAY_GROUPS = (0x0002 << 16) | 0xfffb;
 // Hilfsfunktionen
 // ---------------------------------------------------------------------------
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+// Rakete getroffen: kurz keine Kontrolle (kein Gas, keine Lenkung, leicht gebremst)
+const STUNNED = { throttle: 0, brake: 0.35, steer: 0, handbrake: 0 };
 const lerp = (a, b, t) => a + (b - a) * t;
 function hash3(x, y, z, s = 0) {
   const h = Math.sin(x * 127.1 + y * 311.7 + z * 74.7 + s * 19.19) * 43758.5453;
@@ -139,6 +141,7 @@ export class Car {
     this.nitro = 0; this.oilT = 0; this.armorT = 0; this.hold = false; this.spinDir = 1;
     // v8-Power-ups: Plattfuß, Rammbock, Magnet, EMP, Geist
     this.flatT = 0; this.ramT = 0; this.magnetT = 0; this.magnetTarget = null; this.empT = 0; this.ghostT = 0; this.ghostOn = false;
+    this.stunT = 0; // Rakete: außer Gefecht
     this.name = name;
     this.color = color;
     Object.assign(this, buildCarModel(preset, color, game.envMap, preset.tune));
@@ -261,6 +264,18 @@ export class Car {
         if (w && w.grounded && !w.lost) fx.sparks.burst(w.contact, 2, { speed: 4, spread: 0.6, life: 0.3, up: 1 });
       }
     }
+    // Außer Gefecht (Rakete): schwarzer Qualm aus dem Motor, Funken
+    if (this.stunT > 0) {
+      this.stunAcc = (this.stunAcc || 0) + dt * 22;
+      while (this.stunAcc > 1) {
+        this.stunAcc -= 1;
+        if (this.enginePoint) _a.copy(this.enginePoint); else _a.set(0, 0, -this.p.dims.l * 0.3);
+        _a.x += (Math.random() - 0.5) * this.p.dims.w * 0.6; _a.y += 0.3;
+        this.root.localToWorld(_a);
+        fx.smoke.emit(_a.x, _a.y, _a.z, (Math.random() - 0.5) * 1.2, 2 + Math.random() * 1.5, (Math.random() - 0.5) * 1.2, { color: 0x2a2826, size0: 0.5, size1: 2.2, life: 1.1, rise: 1 });
+        if (Math.random() < 0.3) fx.sparks.burst(_a, 3, { speed: 4, spread: 1, life: 0.35, up: 1 });
+      }
+    }
     // EMP: elektrische Funken am ganzen Auto
     if (this.empT > 0) {
       this.empAcc = (this.empAcc || 0) + dt * 28;
@@ -322,6 +337,7 @@ export class Car {
     this.oilT = Math.max(0, this.oilT - dt); this.armorT = Math.max(0, this.armorT - dt);
     this.flatT = Math.max(0, this.flatT - dt); this.ramT = Math.max(0, this.ramT - dt);
     this.magnetT = Math.max(0, this.magnetT - dt); this.empT = Math.max(0, this.empT - dt); this.ghostT = Math.max(0, this.ghostT - dt);
+    this.stunT = Math.max(0, this.stunT - dt);
     if (this.magnetT <= 0) this.magnetTarget = null;
     this.applyGhost();
     const oil = this.oilT > 0 ? 0.28 : 1;
@@ -336,7 +352,7 @@ export class Car {
     }
 
     // ---- Eingaben, Rückwärtsgang
-    const inp = this.input;
+    const inp = this.stunT > 0 ? STUNNED : this.input;
     let drive = inp.throttle, brake = this.hold ? 1 : inp.brake;
     if (this.gear === -1) {
       drive = inp.brake; brake = inp.throttle;
@@ -760,7 +776,7 @@ export class Car {
       const stage = s > 0.9 || this.glassStage === 1 ? 2 : 1;
       this.glassStage = stage;
       const tex = crackTexture(stage);
-      if (tex) { this.mats.glass.map = tex; this.mats.glass.color.set(0xffffff); this.mats.glass.metalness = 0.25; this.mats.glass.roughness = 0.5; this.mats.glass.needsUpdate = true; }
+      if (tex) { this.mats.glass.map?.dispose(); this.mats.glass.map = tex; this.mats.glass.color.set(0xffffff); this.mats.glass.metalness = 0.25; this.mats.glass.roughness = 0.5; this.mats.glass.needsUpdate = true; }
       else this.mats.glass.color.set(0x6f8394);
       this.glassBroken = true;
       fx.chunks.burst(p, 18, { colors: [0xd8efff, 0xb8d8f0, 0xffffff], speed: 5, size: 0.5 });
@@ -851,6 +867,7 @@ export class Car {
     this.ramT = st.flags & 128 ? 0.5 : 0;
     this.ghostT = st.flags & 256 ? 0.3 : 0;
     this.empT = st.flags & 512 ? 0.3 : 0;
+    this.stunT = st.flags & 1024 ? 0.3 : 0;
     this.applyGhost();
     this.armorT = st.flags & 2 ? 0.5 : 0;
     this.drifting = !!(st.flags & 4);
@@ -900,6 +917,9 @@ export class Car {
     for (const c of this.colliders) this.g.owners.delete(c.handle);
     this.g.world.removeRigidBody(this.body);
     this.g.scene.remove(this.root);
+    // Grafikspeicher freigeben (jedes Auto baut eigene Geometrien/Materialien)
+    this.root.traverse((o) => { if (o.isMesh) o.geometry.dispose(); for (const m of [].concat(o.material || [], o.userData.matReal || [])) m.dispose(); });
+    this.mats.glass.map?.dispose();
   }
 
   // --------------------------------------------------------------- Visuals

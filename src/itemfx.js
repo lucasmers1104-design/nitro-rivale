@@ -529,15 +529,16 @@ export class SmokeWall {
     this.emitters = [];
   }
   start(car, dur = 2.4) { if (car?.root) this.emitters.push({ car, left: dur, acc: 0 }); }
-  puff(p, v) {
+  puff(p, v, owner = null) {
     if (this.list.length >= this.max) this.list.shift();
     const g = 0.84 + Math.random() * 0.14;
-    this.list.push({ p: p.clone(), v: v.clone(), age: 0, life: 4.4 + Math.random() * 1.4, s0: 0.9 + Math.random() * 0.5, s1: 3.6 + Math.random() * 2.2, rot: Math.random() * 6, col: g });
+    this.list.push({ owner, p: p.clone(), v: v.clone(), age: 0, life: 4.4 + Math.random() * 1.4, s0: 0.9 + Math.random() * 0.5, s1: 3.6 + Math.random() * 2.2, rot: Math.random() * 6, col: g });
   }
-  // Dichte an einem Punkt (0..1): für Bots und den Sicht-Schleier
-  density(p) {
+  // Dichte an einem Punkt (0..1): für Bots und den Sicht-Schleier; ignore: eigener Rauch zählt nicht
+  density(p, ignore = null) {
     let d = 0;
     for (const s of this.list) {
+      if (ignore && s.owner === ignore) continue;
       const r = s.s0 + (s.s1 - s.s0) * Math.min(1, s.age / 1.2);
       const dx = p.x - s.p.x, dy = p.y - s.p.y, dz = p.z - s.p.z, q = (dx * dx + dy * dy * 1.6 + dz * dz) / (r * r);
       if (q < 1) d += (1 - q) * 0.45 * Math.min(1, (s.life - s.age) / 1.2);
@@ -545,7 +546,8 @@ export class SmokeWall {
     }
     return d;
   }
-  update(dt) {
+  // cam/viewer: wer die Wand legt, soll den eigenen Rauch nicht direkt vor der Kamera haben
+  update(dt, cam = null, viewer = null) {
     for (let k = this.emitters.length - 1; k >= 0; k--) {
       const e = this.emitters[k];
       e.left -= dt;
@@ -556,7 +558,7 @@ export class SmokeWall {
         e.acc -= 1;
         _v.set((Math.random() - 0.5) * e.car.p.dims.w * 1.6, 0.4 + Math.random() * 0.6, L / 2 + 0.6 + Math.random() * 1.5);
         e.car.root.localToWorld(_v);
-        this.puff(_v, new THREE.Vector3(lv.x * 0.15 + (Math.random() - 0.5) * 2.5, 0.4 + Math.random() * 0.6, lv.z * 0.15 + (Math.random() - 0.5) * 2.5));
+        this.puff(_v, new THREE.Vector3(lv.x * 0.15 + (Math.random() - 0.5) * 2.5, 0.4 + Math.random() * 0.6, lv.z * 0.15 + (Math.random() - 0.5) * 2.5), e.car);
       }
     }
     let n = 0;
@@ -570,7 +572,9 @@ export class SmokeWall {
       if (s.p.y < gy + 0.6) s.p.y = gy + 0.6;
       const grow = s.s0 + (s.s1 - s.s0) * (1 - Math.exp(-s.age * 1.6));
       const fade = Math.min(1, (s.life - s.age) / 1.4);
-      _s.set(grow, grow * 0.78, grow).multiplyScalar(0.25 + 0.75 * fade);
+      // eigener Rauch nahe der Kamera schrumpft weg (bis ~4 m unsichtbar, ab ~13 m voll)
+      const own = cam && viewer && s.owner === viewer ? Math.min(1, Math.max(0, (s.p.distanceTo(cam) - 4) / 9)) : 1;
+      _s.set(grow, grow * 0.78, grow).multiplyScalar((0.25 + 0.75 * fade) * own);
       _q.setFromEuler(new THREE.Euler(s.rot, s.rot * 0.7 + s.age * 0.2, 0));
       _m.compose(s.p, _q, _s);
       this.mesh.setMatrixAt(n, _m);

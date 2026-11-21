@@ -631,10 +631,10 @@ export function buildWorld(game, levelId = 'tal') {
     addStatic(R.ColliderDesc.cuboid(axis === 'x' ? 0.5 : BOUND, 12, axis === 'x' ? BOUND : 0.5).setTranslation(axis === 'x' ? sgn * BOUND : 0, 4, axis === 'z' ? sgn * BOUND : 0));
   }
   if (E.arena) {
-    const n = 54;
+    const n = Math.round((2 * Math.PI * E.arena.r) / 5.1);
     for (let i = 0; i < n; i++) {
       const a = (i / n) * Math.PI * 2;
-      if (Math.sin(a) < -0.93) continue;
+      if (Math.sin(a) < 0 && Math.abs(Math.cos(a) * E.arena.r) < 16) continue; // Einfahrt
       addBarrier(E.arena.x + Math.cos(a) * E.arena.r, E.arena.z + Math.sin(a) * E.arena.r, -a, (2 * Math.PI * E.arena.r) / n - 0.15, i % 2 ? 0xd9322b : 0xf1efe9);
     }
   }
@@ -683,7 +683,7 @@ export function buildWorld(game, levelId = 'tal') {
   // ---------------- Arena (nur Grünes Tal)
   if (E.arena) {
     const A = E.arena;
-    const g = new THREE.CircleGeometry(A.r + 0.5, 36).rotateX(-Math.PI / 2).toNonIndexed();
+    const g = new THREE.CircleGeometry(A.r + 0.5, 48).rotateX(-Math.PI / 2).toNonIndexed();
     const cols = [];
     for (let i = 0; i < g.attributes.position.count; i += 3) { const s = 0.27 + rand() * 0.05; for (let k = 0; k < 3; k++) cols.push(s, s, s * 1.04); }
     g.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
@@ -1095,7 +1095,7 @@ export class Props {
       }
     }
     if (E.arena) {
-      for (let k = 0; k < 18; k++) {
+      for (let k = 0; k < Math.round(E.arena.r * 0.4); k++) {
         const a = rand() * Math.PI * 2, r = 6 + rand() * (E.arena.r - 12);
         barrels.push(new THREE.Vector3(E.arena.x + Math.cos(a) * r, 0, E.arena.z + Math.sin(a) * r));
       }

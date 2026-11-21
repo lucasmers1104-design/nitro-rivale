@@ -26,12 +26,25 @@ export const ITEMS = {
 };
 export const ITEM_ORDER = Object.keys(ITEMS);
 
-// Gewichte nach Platz: vorne eher Verteidigung, hinten eher Aufholen
-const WEIGHTS = [
-  { oil: 3, barrel: 3, spikes: 3, smoke: 2, jump: 2, armor: 2, ramp: 1, nitro: 1, shock: 1, ghost: 1 },
-  { nitro: 3, rocket: 2, oil: 2, barrel: 2, spikes: 2, smoke: 2, jump: 2, shock: 2, ram: 2, armor: 1, repair: 1, magnet: 1, ramp: 1, ghost: 1 },
-  { nitro: 4, rocket: 3, magnet: 3, emp: 2, ram: 2, shock: 2, repair: 2, ghost: 2, armor: 1, jump: 1 },
-];
+// Gewichte nach Platz: vorne Verteidigung, hinten Aufholen (Rakete + Nitro je ~25 % beim Letzten).
+// Dazwischen wird stufenlos gemischt, damit jeder Platz etwas anders würfelt.
+const W_FRONT = { oil: 4, barrel: 3, spikes: 3, smoke: 3, armor: 2, jump: 2, ramp: 1, ghost: 1, shock: 1, nitro: 1 };
+const W_MID = { nitro: 3, rocket: 2, oil: 2, barrel: 2, spikes: 2, smoke: 2, jump: 2, shock: 2, ram: 2, armor: 1, repair: 1, magnet: 1, ramp: 1, ghost: 1 };
+const W_BACK = { nitro: 6, rocket: 6, magnet: 3, emp: 2, ghost: 2, shock: 1, ram: 1, repair: 1, jump: 1 };
+// rankFrac: 0 = Führender, 1 = Letzter; hurt/fine: Auto stark/kaum beschädigt; derby: keine Reparatur
+export function itemWeights(rankFrac, { derby = false, hurt = false, fine = false } = {}) {
+  const f = clamp(Number(rankFrac) || 0, 0, 1);
+  const [a, b, k] = f < 0.5 ? [W_FRONT, W_MID, f * 2] : [W_MID, W_BACK, (f - 0.5) * 2];
+  const w = {};
+  for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) {
+    const v = (a[key] || 0) * (1 - k) + (b[key] || 0) * k;
+    if (v > 0) w[key] = v;
+  }
+  if (hurt) w.repair = (w.repair || 0) + 3;
+  else if (fine) delete w.repair;
+  if (derby) delete w.repair;
+  return w;
+}
 
 function boxTexture() {
   const cv = document.createElement('canvas'); cv.width = cv.height = 128;
@@ -55,6 +68,7 @@ export class Items {
     this.g = game;
     this.track = track;
     this.enabled = enabled;
+    this.arena = arena; // Derby
     this.group = new THREE.Group();
     game.scene.add(this.group);
     this.boxes = [];
@@ -66,6 +80,8 @@ export class Items {
     this.seq = 0;
     this.owned = () => true; // im Mehrspieler: nur eigene Autos lösen Effekte aus
     this.emit = null; // im Mehrspieler: Ereignis an die anderen schicken
+    this.beams = new Map();      // Magnet-Strahlen je Auto
+    this.bolts = [];             // EMP-Blitze
     if (!enabled) return;
     // Kistenreihen an ruhigen Stellen der Strecke
     const N = track.N, W = track.width;
@@ -75,7 +91,7 @@ export class Items {
     // Derby-Arena: zwei Kistenringe in der Arena statt Reihen an der Strecke
     const addBox = (p, phase) => { const mesh = new THREE.Mesh(geo, mat); mesh.castShadow = true; mesh.position.copy(p); this.group.add(mesh); this.boxes.push({ pos: p, mesh, off: 0, phase }); };
     if (arena) {
-      for (const [n, rf] of [[5, 0.32], [8, 0.68]]) for (let k = 0; k < n; k++) {
+      for (const [n, rf] of [[6, 0.3], [10, 0.64]]) for (let k = 0; k < n; k++) {
         const a = (k / n) * Math.PI * 2 + rf * 3;
         const p = new THREE.Vector3(arena.x + Math.cos(a) * arena.r * rf, 0, arena.z + Math.sin(a) * arena.r * rf);
         p.y = track.heightAt(p.x, p.z) + 1.15;
@@ -110,16 +126,12 @@ export class Items {
     this.oilFx = new OilFx(this.group, track, game.envMap);
     this.blastFx = new BlastFx(this.group, track, game);
     this.smokeWall = new SmokeWall(this.group, track);
-    this.beams = new Map();      // Magnet-Strahlen je Auto
-    this.bolts = [];             // EMP-Blitze
   }
 
   // Zufallsgewinn; rankFrac: 0 = Führender, 1 = Letzter
   roll(rankFrac, car) {
-    const w = { ...WEIGHTS[rankFrac < 0.34 ? 0 : rankFrac < 0.67 ? 1 : 2] };
     const st = car.stats;
-    if (st.body < 60 || st.engine < 60) w.repair = (w.repair || 0) + 3;
-    else if (st.body > 92) delete w.repair;
+    const w = itemWeights(rankFrac, { derby: !!this.arena, hurt: st.body < 60 || st.engine < 60, fine: st.body > 92 });
     const tot = Object.values(w).reduce((a, b) => a + b, 0);
     let r = Math.random() * tot;
     for (const [k, v] of Object.entries(w)) if ((r -= v) <= 0) return k;
@@ -157,7 +169,7 @@ export class Items {
 
     this.oilFx?.update(dt);
     this.blastFx?.update(dt);
-    this.smokeWall?.update(dt);
+    this.smokeWall?.update(dt, this.g.camera?.position, cars.find((c) => c.isPlayer)?.car);
     this.updateBeams(dt, cars);
     // Gefahren: Ölflecken + Sprengfässer
     for (let k = this.hazards.length - 1; k >= 0; k--) {
@@ -212,7 +224,7 @@ export class Items {
           if (h.type === 'barrel' && d < 2.6) { this.explode(h.pos, 7, 1.15, h.owner); this.emit?.({ type: 'boom', hz: h.id, pos: [h.pos.x, h.pos.y, h.pos.z], r: 7, k: 1.15 }); gone = true; break; }
         }
       }
-      if (gone) { this.group.remove(h.mesh); if (h.body) this.g.world.removeRigidBody(h.body); this.hazards.splice(k, 1); }
+      if (gone) { this.group.remove(h.mesh); h.mesh.traverse((o) => o.geometry?.dispose()); if (h.body) this.g.world.removeRigidBody(h.body); this.hazards.splice(k, 1); }
     }
 
     // Raketen
@@ -251,10 +263,10 @@ export class Items {
         if (Math.hypot(p.x - r.pos.x, p.y - r.pos.y, p.z - r.pos.z) < 2.4) { hit = true; break; }
       }
       if (hit || r.age > 5.5) {
-        this.explode(r.pos, 5.5, hit ? 1.0 : 0.6, r.owner);
-        if (hit) this.emit?.({ type: 'boom', rk: r.id, pos: [r.pos.x, r.pos.y, r.pos.z], r: 5.5, k: 1.0 });
-        this.group.remove(r.mesh);
-        this.rockets.splice(k, 1);
+        // Treffer: viel Schaden und das Auto ist kurz außer Gefecht
+        this.explode(r.pos, 6, hit ? 1.5 : 0.6, r.owner, { stun: hit });
+        if (hit) this.emit?.({ type: 'boom', rk: r.id, pos: [r.pos.x, r.pos.y, r.pos.z], r: 6, k: 1.5 });
+        this.dropRocket(r);
       }
     }
 
@@ -265,7 +277,7 @@ export class Items {
       const e = r.age / 0.55;
       r.mesh.scale.setScalar(1 + e * r.max);
       r.mesh.material.opacity = Math.max(0, 0.85 * (1 - e));
-      if (e >= 1) { this.group.remove(r.mesh); this.rings.splice(k, 1); }
+      if (e >= 1) { this.group.remove(r.mesh); r.mesh.geometry.dispose(); r.mesh.material.dispose(); this.rings.splice(k, 1); }
     }
 
     // Panzer-Leuchten
@@ -282,7 +294,8 @@ export class Items {
   }
 
   // Explosion: Stoß + Schaden für alle Autos im Radius
-  explode(pos, radius, power, owner) {
+  // stun: Raketentreffer – Ziel kurz ohne Kontrolle, im Derby extra Lebenspunkte weg
+  explode(pos, radius, power, owner, { stun = false } = {}) {
     const fx = this.g.fx;
     fx.sparks.burst(pos, 60, { speed: 14, spread: 1, life: 0.9 });
     fx.chunks.burst(pos, 14, { dir: new THREE.Vector3(0, 1, 0), speed: 8, colors: [0x2a2a2a, 0x555555, 0xd9322b] });
@@ -299,16 +312,21 @@ export class Items {
       const p = car.body.translation();
       const d = Math.hypot(p.x - pos.x, p.y - pos.y, p.z - pos.z);
       if (d > radius) continue;
-      const k = (1 - d / radius) * power;
+      const k = (1 - d / radius) * power, kp = Math.min(k, 1); // Wurf gedeckelt, Schaden nicht
       const m = car.p.mass;
       const dir = new THREE.Vector3(p.x - pos.x, 0, p.z - pos.z);
       if (dir.lengthSq() < 0.01) dir.set(Math.random() - 0.5, 0, Math.random() - 0.5);
       dir.normalize();
-      car.body.applyImpulse({ x: dir.x * m * 5 * k, y: m * (6.5 * k + 1.5), z: dir.z * m * 5 * k }, true);
-      car.body.applyTorqueImpulse({ x: (Math.random() - 0.5) * m * 2.5 * k, y: (Math.random() - 0.5) * m * 6 * k, z: (Math.random() - 0.5) * m * 2.5 * k }, true);
+      car.body.applyImpulse({ x: dir.x * m * 5 * kp, y: m * (6.5 * kp + 1.5), z: dir.z * m * 5 * kp }, true);
+      car.body.applyTorqueImpulse({ x: (Math.random() - 0.5) * m * 2.5 * kp, y: (Math.random() - 0.5) * m * 6 * kp, z: (Math.random() - 0.5) * m * 2.5 * kp }, true);
       const hitP = new THREE.Vector3(p.x, p.y, p.z).addScaledVector(dir, -car.p.dims.w * 0.5);
-      car.applyImpact(hitP, dir, 6 + 13 * k);
-      this.events.push({ type: 'hit', car, by: owner, kind: 'boom' });
+      car.applyImpact(hitP, dir, 6 + 13 * k + (stun ? 10 * k : 0));
+      this.events.push({ type: 'hit', car, by: owner, kind: stun ? 'rocket' : 'boom' });
+      if (stun && k > 0.3 && car.armorT <= 0) {
+        car.stunT = Math.max(car.stunT || 0, 0.8 + Math.min(k, 1.2));
+        if (this.g.derby && car.derbyHp != null) car.derbyHp = Math.max(0, car.derbyHp - 10 * Math.min(k, 1.5));
+        this.events.push({ type: 'stun', car, by: owner });
+      }
     }
   }
 
@@ -446,8 +464,22 @@ export class Items {
       if (e.age > e.dur) { e.bolt.dispose(); this.bolts.splice(k, 1); }
     }
   }
+  nearestCar(me, pos) {
+    let best = null, bd = Infinity;
+    for (const c of this.g.cars?.() || []) {
+      if (c === me || c.out || c.disposed || c.ghostT > 0) continue;
+      const p = c.body.translation(), d = Math.hypot(p.x - pos.x, p.z - pos.z);
+      if (d < bd) { bd = d; best = c; }
+    }
+    return best;
+  }
+  dropRocket(r) {
+    this.group.remove(r.mesh);
+    r.mesh.traverse((o) => { o.geometry?.dispose(); });
+    const i = this.rockets.indexOf(r); if (i >= 0) this.rockets.splice(i, 1);
+  }
   // Dichte der Nebelwand an einem Punkt (für Bots und den Sicht-Schleier)
-  smokeAt(p) { return this.smokeWall ? this.smokeWall.density(p) : 0; }
+  smokeAt(p, ignore = null) { return this.smokeWall ? this.smokeWall.density(p, ignore) : 0; }
   use(car, ahead = null, aheadAll = []) {
     const it = car.item;
     if (!it || car.itemRoll > 0) return null;
@@ -474,8 +506,10 @@ export class Items {
       const start = pos.clone().addScaledVector(flatF, car.p.dims.l / 2 + 1.2); start.y += 0.6;
       const v = b.linvel();
       const speed = Math.max(62, Math.hypot(v.x, v.z) + 34);
-      this.spawnRocket(start, flatF, speed, car, ahead, id);
-      Object.assign(ev, { pos: [start.x, start.y, start.z], dir: [flatF.x, flatF.y, flatF.z], speed, target: ahead?.netId || null });
+      // Derby: kein "Vordermann" – die Rakete sucht sich den nächsten Gegner (sonst flöge sie die Rennstrecke entlang)
+      const target = this.arena ? this.nearestCar(car, pos) : ahead;
+      this.spawnRocket(start, flatF, speed, car, target, id);
+      Object.assign(ev, { pos: [start.x, start.y, start.z], dir: [flatF.x, flatF.y, flatF.z], speed, target: target?.netId || null });
     } else if (it === 'shock') { this.shockAt(pos, car); ev.pos = [pos.x, pos.y, pos.z]; }
     else if (it === 'armor') car.armorT = 7;
     else if (it === 'smoke') this.smokeWall.start(car, 2.4);
@@ -519,16 +553,18 @@ export class Items {
       return;
     }
     if (e.type === 'boom') {
+      if (!Array.isArray(e.pos) || e.pos.length !== 3 || !e.pos.every(Number.isFinite)) return;
       const pos = V(e.pos);
       if (e.hz) { const h = this.hazards.find((x) => x.id === e.hz); if (!h) return; this.group.remove(h.mesh); this.hazards.splice(this.hazards.indexOf(h), 1); }
-      if (e.rk) { const r = this.rockets.find((x) => x.id === e.rk); if (!r) return; this.group.remove(r.mesh); this.rockets.splice(this.rockets.indexOf(r), 1); }
-      this.explode(pos, e.r || 6, e.k || 1, byId(e.id));
+      if (e.rk) { const r = this.rockets.find((x) => x.id === e.rk); if (!r) return; this.dropRocket(r); }
+      // Werte von anderen Clients begrenzen (sonst könnte einer alle Autos wegsprengen)
+      this.explode(pos, clamp(Number(e.r) || 6, 1, 8), clamp(Number(e.k) || 1, 0, 1.5), byId(e.id), { stun: !!e.rk });
     }
   }
 
   clear() {
     for (const h of this.hazards) { this.group.remove(h.mesh); if (h.body) { try { this.g.world.removeRigidBody(h.body); } catch { /* Welt schon weg */ } h.body = null; } }
-    for (const r of this.rockets) this.group.remove(r.mesh);
+    for (const r of [...this.rockets]) this.dropRocket(r);
     for (const r of this.rings) this.group.remove(r.mesh);
     this.hazards = []; this.rockets = []; this.rings = [];
     this.oilFx?.clear(); this.blastFx?.clear(); this.smokeWall?.clear();
@@ -538,9 +574,10 @@ export class Items {
   }
 
   dispose() {
+    this.group.traverse((o) => { if (o.geometry) o.geometry.dispose(); }); // vor clear(): auch Fässer, Nagelbänder, Raketen noch auf der Strecke
+    const bm = this.boxes[0]?.mesh.material; bm?.map?.dispose(); bm?.dispose();
     this.clear();
     this.oilFx?.dispose(); this.blastFx?.dispose(); this.smokeWall?.dispose();
     this.g.scene.remove(this.group);
-    this.group.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
   }
 }

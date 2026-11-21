@@ -111,3 +111,22 @@ Läuft die Seite woanders als der Server, kann unter Einstellungen → „Spiels
 - **Modi:** *Ausscheiden* (nach jeder Runde des Führenden fliegt der Letzte raus) und *Derby-Arena* (Last Man Standing mit Lebenspunkten, Bots mit eigener Derby-KI `DerbyDriver`). Online entscheidet beim Ausscheiden der Gastgeber, im Derby meldet jeder seine eigenen Autos (`out`-Nachricht, siehe `server/rooms.mjs`).
 - **Hinweis Server:** v8 braucht den neuen Server (neue Autos, Tuning, Modi) → in Coolify einmal „Redeploy“.
 - Tests: `node test-server.mjs`, `node test-powerups.mjs`, `node test-speed.mjs`, `node test4.mjs vipera,brummi`, `python3 browser-mp-derby.py`.
+
+## Neu in v9: Coins, Spielstand, Rakete, Derby
+- **Coins** (`src/economy.js`): Nach jedem Rennen, Ausscheiden oder Derby gibt es Coins – nach gefahrener Strecke (Derby: Minuten), geschlagenen Gegnern (Bots nach Stärke, echte Fahrer zählen am meisten) und Sieg-Bonus. Allein fahren bringt kaum etwas.
+  - Ausgeben: Autos (Brutus gratis, Brummi 900 … Vipera 9 000), Strecken (Grünes Tal gratis, Canyon 750, Küste 1 000, Pass 1 500), Tuning-Teile je Auto (Stufen der Reihe nach, Motor 500 / 1 500 / 4 000 usw.).
+  - Kaufen: erster Klick fragt nach („SICHER?“), zweiter kauft. Münzen fliegen beim Verdienen zum Zähler oben und beim Kaufen vom Zähler zum Teil.
+  - Balancing prüfen: `node test-economy.mjs` (Motor komplett ≈ 44 typische Rennen, Stufe 3 allein ≈ 29).
+- **Spielstand** liegt im Browser *und* auf dem Spielserver (`server/saves.mjs`, `POST /api/save`, eine JSON-Datei in `DATA_DIR`). Unter Einstellungen steht der Spielstand-Code – auf einem anderen PC eingeben und der Fortschritt ist dort.
+- **Rakete**: mehr Schaden, Treffer legt das Auto ~1,7 s lahm (kein Gas, keine Lenkung). Im Derby sucht sie den nächsten Gegner.
+- **Power-ups nach Platz**: stufenlos – vorne Verteidigung, als Letzter je ~25 % Rakete und Nitro.
+- **Nebelwand**: wer sie legt, sieht durch den eigenen Rauch durch; nur Verfolger tappen im Nebel.
+- **Derby**: Arena mit Radius 64 m statt 44 m, keine Reparatur aus den Kisten.
+
+### Spielstände in Coolify sichern (einmalig)
+1. Coolify → Projekt → die Nitro-App → **Persistent Storage** → **+ Add** → **Volume Mount**.
+2. Name z. B. `nitro-saves`, **Destination Path** `/app/data` → Speichern.
+3. **Redeploy** klicken.
+4. Prüfen: `https://nitro-server.traumcode.cloud/health` zeigt `"store":"ok"` und `"saves": …`. Steht dort `"fehler"`, kann der Server nicht in den Ordner schreiben.
+
+Ohne Volume gehen die Spielstände auf dem Server bei jedem Redeploy verloren (im Browser bleiben sie, und das Spiel lädt sie beim nächsten Start wieder hoch).

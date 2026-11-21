@@ -129,11 +129,10 @@ export class Hub {
     if (!room) return;
     room.players = room.players.filter((p) => p !== c.id);
     if (!room.players.length) { this.closeRoom(room); return; }
-    if (room.host === c.id) {
-      room.host = room.players[0];
-      // Bots gehören dem Gastgeber; im Rennen verschwinden sie mit ihm
-      if (room.race) for (const g of room.race.grid) if (g.owner === c.id) g.gone = true;
-    }
+    if (room.host === c.id) room.host = room.players[0];
+    // Sein Auto (und als Gastgeber die Bots) verschwindet; "gone" geht mit der Ampel an alle,
+    // auch an die, die beim "left" noch geladen haben
+    if (room.race) for (const g of room.race.grid) if (g.owner === c.id) g.gone = true;
     this.broadcast(room, { t: 'left', id: c.id, host: room.host });
     if (room.race) { room.race.ready.delete(c.id); this.waitInfo(room); this.checkReady(room); this.checkEnd(room); }
     this.sync(room);
@@ -209,10 +208,12 @@ export class Hub {
     this.sync(room);
     // Sicherheitsnetz: Rennen endet spätestens nach 20 Minuten
     r.endTimer = this.T.setTimeout(() => this.end(room, id), 20 * 60 * 1000);
+    this.checkEnd(room); // beim Laden gegangen: im Derby/Ausscheiden ist vielleicht nur noch einer übrig
   }
   ownerOf(room, carId) { return room.race?.grid.find((g) => g.id === carId)?.owner; }
   relayState(c, room, m) {
-    const cars = m.c.filter((s) => Array.isArray(s) && this.ownerOf(room, s[0]) === c.id).slice(0, MAX);
+    // nur eigene Autos und nur Zahlen (packCar: id + 21 Werte) – sonst rechnen die anderen mit NaN
+    const cars = m.c.filter((s) => Array.isArray(s) && s.length >= 22 && s.length <= 40 && s.every((v, k) => k === 0 || Number.isFinite(v)) && this.ownerOf(room, s[0]) === c.id).slice(0, MAX);
     if (!cars.length) return;
     this.broadcast(room, { t: 's', c: cars }, c.id);
   }

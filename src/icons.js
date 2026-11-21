@@ -45,6 +45,8 @@ export const UI_ICONS = {
   crown: S('<path d="M8 50 L12 18 L24 32 L32 12 L40 32 L52 18 L56 50 Z" fill="#ffc43a"/>'),
   robot: S('<rect x="12" y="20" width="40" height="32" rx="9" fill="#c9d3e6"/><circle cx="25" cy="35" r="5" fill="#3fb7ff"/><circle cx="39" cy="35" r="5" fill="#3fb7ff"/><path d="M32 20 V10" /><circle cx="32" cy="9" r="4" fill="#ff5fa2"/><path d="M24 45 H40" />'),
   copy: S('<rect x="20" y="20" width="32" height="36" rx="5" fill="#fff"/><path d="M14 44 H12 C10 44 9 43 9 41 V12 C9 10 10 8 12 8 H38 C40 8 41 9 41 11 V13" fill="none"/>'),
+  coin: S('<circle cx="32" cy="32" r="27" fill="#ffbf2e"/><circle cx="32" cy="32" r="19" fill="#ffe680" stroke-width="3"/><path d="M32 19 L35.6 27.4 L44.5 28 L37.7 33.8 L39.8 42.6 L32 37.8 L24.2 42.6 L26.3 33.8 L19.5 28 L28.4 27.4 Z" fill="#ffbf2e" stroke-width="2.5"/>'),
+  lock: S('<rect x="13" y="28" width="38" height="29" rx="6" fill="#ffc43a"/><path d="M21 28 V20 A11 11 0 0 1 43 20 V28" fill="none" stroke-width="6"/><circle cx="32" cy="41" r="4" fill="#23264a"/>'),
   car: S('<path d="M6 40 V31 C6 28 8 27 11 26 L19 24 L27 14 H43 L51 24 C56 25 58 27 58 31 V40 Z" fill="currentColor"/><path d="M29 18 H41 L46 24 H24 Z" fill="#bfeaff"/><circle cx="18" cy="42" r="8" fill="#2c2f3b"/><circle cx="46" cy="42" r="8" fill="#2c2f3b"/><circle cx="18" cy="42" r="3" fill="#c9d3e6" stroke-width="2"/><circle cx="46" cy="42" r="3" fill="#c9d3e6" stroke-width="2"/>'),
   play: S('<path d="M20 10 L52 32 L20 54 Z" fill="#fff"/>'),
   pause: S('<rect x="14" y="10" width="13" height="44" rx="3" fill="#fff"/><rect x="37" y="10" width="13" height="44" rx="3" fill="#fff"/>'),

@@ -408,16 +408,16 @@
   #pausePanel h2 { text-align: center; margin: 0 0 6px; font: 400 64px/1 var(--disp); }
   #pausePanel .btn { height: 84px; font-size: 34px; }
   #resPanel { left: 260px; top: 70px; width: 1080px; height: 760px; }
-  #resHead { display: flex; align-items: center; gap: 22px; margin-bottom: 16px; }
+  #resHead { display: flex; align-items: center; gap: 22px; margin-bottom: 8px; }
   #resPlace { font: 400 140px/0.85 var(--disp); }
   #resHead h2 { margin: 0; font: 400 56px/1 var(--disp); }
   #resHead .sub { font-size: 22px; color: var(--mut); }
   #resHead .trophy { width: 120px; height: 120px; }
   .resTable { display: flex; flex-direction: column; gap: 6px; }
-  .resTable div { display: grid; grid-template-columns: 70px 1fr 220px 160px 150px; align-items: center; gap: 10px; background: #fff; border: 4px solid var(--navy); border-radius: 18px; padding: 6px 14px; font-size: 21px; }
+  .resTable div { display: grid; grid-template-columns: 70px 1fr 220px 160px 150px; align-items: center; gap: 10px; background: #fff; border: 4px solid var(--navy); border-radius: 18px; padding: 4px 14px; font-size: 21px; }
   .resTable div.me { background: linear-gradient(#ffe680, #ffbf2e); }
   .resTable div.h { background: none; border: 0; padding: 0 18px; font-size: 15px; color: var(--mut); letter-spacing: .1em; text-transform: uppercase; }
-  .resTable em { font: 400 32px/1 var(--disp); font-style: normal; text-align: center; }
+  .resTable em { font: 400 30px/1 var(--disp); font-style: normal; text-align: center; }
   .resTable .nm { display: flex; gap: 10px; align-items: center; font-weight: 700; }
   .resTable .nm i { width: 18px; height: 18px; border-radius: 50%; border: 3px solid var(--navy); flex: none; }
   .resTable .t { font-variant-numeric: tabular-nums; }
@@ -441,6 +441,51 @@
   .tools .btn.on { --c1: #ffe680; --c2: #ffbf2e; --dk: #d18c0c; }
   .read { display: grid; grid-template-columns: 130px 1fr; gap: 4px 10px; font-size: 15px; }
   .read span:nth-child(odd) { color: var(--mut); }
+
+  /* ---------- Coins ---------- */
+  #coinPill { position: fixed; z-index: 45; right: 18px; top: 18px; transform: scale(var(--s)); transform-origin: top right; display: none; align-items: center; gap: 10px; background: var(--cream); border: 5px solid var(--navy); border-radius: 999px; padding: 5px 24px 5px 6px; box-shadow: 0 6px 0 rgba(20,22,48,.4); font: 400 36px/1 var(--disp); color: var(--navy); pointer-events: none; }
+  #coinPill .ic { width: 50px; height: 50px; }
+  body[data-screen="menu"] #coinPill, body[data-screen="sp"] #coinPill, body[data-screen="garage"] #coinPill, body[data-screen="tuning"] #coinPill, body[data-screen="results"] #coinPill, body[data-screen="settings"] #coinPill { display: flex; }
+  body[data-screen="menu"] #coinPill { right: auto; left: 50%; transform: translateX(-50%) scale(var(--s)); transform-origin: top center; }
+  #coinPill.bump { animation: cbump .3s ease-out; }
+  #coinPill.spend { animation: cshake .45s ease-out; }
+  #coinPill.spend b { animation: cred 1s ease-out; }
+  @keyframes cred { 0%, 55% { color: #e0334a; } 100% { color: var(--navy); } }
+  @keyframes cbump { 0% { scale: 1; } 40% { scale: 1.16; } 100% { scale: 1; } }
+  @keyframes cshake { 0%, 100% { translate: 0; } 20% { translate: -8px 0; } 40% { translate: 7px 0; } 60% { translate: -5px 0; } 80% { translate: 3px 0; } }
+  .coinFx { position: fixed; left: 0; top: 0; width: calc(42px * var(--s)); height: calc(42px * var(--s)); z-index: 70; pointer-events: none; filter: drop-shadow(0 3px 0 rgba(20,22,48,.35)); }
+  .coinTag { display: inline-flex; align-items: center; gap: 6px; }
+  .coinTag .ic { width: 1.1em; height: 1.1em; }
+  #resCoins { display: inline-flex; align-items: center; gap: 12px; margin-top: 8px; background: linear-gradient(#fff6c8, #ffe27a); border: 4px solid var(--navy); border-radius: 999px; padding: 3px 14px 3px 6px; box-shadow: 0 4px 0 #d18c0c; transform-origin: left center; }
+  #resCoins .amt { display: flex; align-items: center; gap: 6px; font: 400 38px/1.05 var(--disp); color: #fff; -webkit-text-stroke: 7px var(--navy); paint-order: stroke fill; }
+  #resCoins .amt .ic { width: 40px; height: 40px; }
+  #resCoins .why { display: flex; flex-wrap: nowrap; gap: 5px; }
+  #resCoins.pop { animation: rpop .55s cubic-bezier(.2,1.6,.4,1); }
+  @keyframes rpop { 0% { transform: scale(.4) rotate(-6deg); opacity: 0; } 100% { transform: none; opacity: 1; } }
+  .trackCard { position: relative; }
+  .lockTag { position: absolute; right: 14px; top: 14px; display: flex; align-items: center; gap: 8px; background: var(--navy); color: #fff; border-radius: 999px; padding: 6px 16px 6px 8px; font: 400 26px/1 var(--disp); }
+  .lockTag .ic { width: 30px; height: 30px; }
+  .trackCard.locked canvas { filter: grayscale(.75) brightness(.85); }
+  .btn.buy { --c1: #ffe680; --c2: #ffbf2e; --dk: #d18c0c; }
+  .btn.buy .ic { width: 1.2em; height: 1.2em; }
+  .btn.confirm { --c1: #ffc066; --c2: #f7861f; --dk: #c45f0c; animation: cpulse .7s ease-in-out infinite alternate; }
+  @keyframes cpulse { to { filter: brightness(1.12); transform: scale(1.03); } }
+  .tCard .price { position: absolute; right: 10px; top: 10px; display: flex; align-items: center; gap: 5px; font: 700 15px/1 var(--font); background: #fff; border: 3px solid var(--navy); border-radius: 999px; padding: 3px 10px 3px 3px; }
+  .tCard .price .ic { width: 22px; height: 22px; }
+  .tCard.buy .nm, .tCard.lock .nm { padding-right: 104px; }
+  .tCard.lock { opacity: .62; }
+  .tCard.lock .price { background: #e9ecf8; padding-left: 10px; }
+  .tCard.confirm { box-shadow: 0 5px 0 #c45f0c, 0 0 0 4px #f7861f; }
+  .tCard.confirm .price { background: linear-gradient(#ffc066, #f7861f); color: #fff; -webkit-text-stroke: 3px var(--navy); paint-order: stroke fill; }
+  .tCard.bought, .trackCard.bought { animation: tbought .6s cubic-bezier(.2,1.6,.4,1); }
+  body[data-screen="results"] #hud .corner.tr { visibility: hidden; }
+  @keyframes tbought { 0% { transform: scale(1); } 30% { transform: scale(1.07); } 100% { transform: scale(1); } }
+  .carLock { display: inline-flex; align-items: center; gap: 6px; font: 700 17px/1 var(--font); color: #fff; background: var(--navy); border-radius: 999px; padding: 6px 12px 6px 6px; }
+  .carLock .ic { width: 22px; height: 22px; }
+  .saveRow { display: flex; gap: 10px; align-items: center; }
+  #saveCode { font: 400 28px/1 var(--disp); letter-spacing: .06em; }
+  #saveIn { width: 230px; font: 700 20px/1 var(--font); color: var(--navy); border: 3px solid var(--navy); border-radius: 12px; padding: 8px 12px; outline: none; text-transform: uppercase; }
+  .saveState { font-size: 17px; color: var(--mut); margin: -2px 6px 10px; }
 </style>
 </head>
 <body>
@@ -480,7 +525,7 @@
       <div id="driverBest"></div>
       <div class="btns"><button class="btn orange sm" id="dGarage"><span>GARAGE</span></button><button class="btn blue sm" id="dSettings"><span>EINSTELLUNGEN</span></button></div>
     </div>
-    <div id="version">Nitro Rivale · v8 · Stand __BUILD__</div>
+    <div id="version">Nitro Rivale · v9 · Stand __BUILD__</div>
   </div>
 </div>
 
@@ -586,13 +631,16 @@
   <div class="modal-bg"></div>
   <div class="stage1600">
     <div class="panel" id="setPanel">
-      <div class="phead"><button class="btn white sq" id="setBack"><span class="ic" data-ic="back"></span></button><div><h2>EINSTELLUNGEN</h2><div class="sub">Werden in diesem Browser gespeichert</div></div></div>
+      <div class="phead"><button class="btn white sq" id="setBack"><span class="ic" data-ic="back"></span></button><div><h2>EINSTELLUNGEN</h2><div class="sub">Coins, Autos und Tuning liegen auf dem Spielserver – mit dem Code auch auf anderen PCs</div></div></div>
       <div class="opt"><span class="name">Lautstärke</span><input type="range" id="setVol" min="0" max="100" value="85"></div>
       <div class="opt"><span class="name">Grafik</span><div class="seg" id="segGfx"><button data-v="hoch">Hoch</button><button data-v="mittel">Mittel</button><button data-v="niedrig">Niedrig</button></div></div>
       <div class="opt"><span class="name">Kamera</span><div class="seg" id="segCam"><button data-v="0">Nah</button><button data-v="1">Weit</button><button data-v="2">Cockpit</button></div></div>
       <div class="opt"><span class="name">Kamera wackelt bei Tempo</span><div class="seg" id="segShake"><button data-v="1">An</button><button data-v="0">Aus</button></div></div>
       <div class="opt"><span class="name">Tasten-Hinweise im Rennen</span><div class="seg" id="segKeys"><button data-v="1">An</button><button data-v="0">Aus</button></div></div>
       <div class="opt"><span class="name">Spielserver</span><input id="setServer" placeholder="automatisch (diese Seite)" spellcheck="false"></div>
+      <div class="opt"><span class="name">Dein Spielstand-Code</span><div class="saveRow"><b id="saveCode">–</b><button class="btn blue sm" id="saveCopy"><span>KOPIEREN</span></button></div></div>
+      <div class="opt"><span class="name">Code von anderem PC</span><div class="saveRow"><input id="saveIn" placeholder="XXXX-XXXX-XXXX" maxlength="14" spellcheck="false"><button class="btn sm" id="saveLoad"><span>LADEN</span></button></div></div>
+      <div class="saveState" id="saveState"></div>
     </div>
   </div>
 </div>
@@ -640,7 +688,7 @@
     </div>
     <div id="tFlash"></div>
     <button class="btn red sm" id="tReset"><span class="ic" data-ic="reset"></span><span>ALLES SERIE</span></button>
-    <div class="pillN" id="tHint">Teil anklicken zum Einbauen · Maus ziehen zum Drehen</div>
+    <div class="pillN" id="tHint">Teil anklicken: einbauen oder kaufen · Maus ziehen zum Drehen</div>
     <button class="btn" id="tDone"><span>FERTIG</span></button>
   </div>
 </div>
@@ -693,7 +741,7 @@
   <div class="modal-bg"></div>
   <div class="stage1600">
     <div class="panel" id="resPanel">
-      <div id="resHead"><div class="trophy" data-ic="trophy"></div><div id="resPlace" class="out">1.</div><div><h2 id="resTitle">SIEG!</h2><div class="sub" id="resSub"></div></div></div>
+      <div id="resHead"><div class="trophy" data-ic="trophy"></div><div id="resPlace" class="out">1.</div><div><h2 id="resTitle">SIEG!</h2><div class="sub" id="resSub"></div><div id="resCoins" class="hidden" title="Belohnung"><span class="amt"><span class="ic" data-ic="coin"></span><b id="resCoinVal">+0</b></span><span class="why" id="resCoinWhy"></span></div></div></div>
       <div class="resTable" id="resTable"></div>
       <div class="pfoot">
         <button class="btn red" id="rMenu"><span>HAUPTMENÜ</span></button>
@@ -739,6 +787,7 @@
 </div>
 
 <div class="corner cc" style="top:80%;z-index:40;pointer-events:none"><div id="toasts"></div></div>
+<div id="coinPill"><span class="ic" data-ic="coin"></span><b id="coinVal">0</b></div>
 
 <script>/*BUNDLE*/</script>
 </body>
