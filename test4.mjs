@@ -21,7 +21,7 @@ function fresh(id, kmh = 0) {
   if (kmh) { c.body.setLinvel({ x: 0, y: 0, z: -kmh / 3.6 }, true); c.gear = Math.max(1, Math.min(6, Math.round(kmh / 45))); run(g, c, 0.1, () => (c.input = { throttle: 0.5, brake: 0, steer: 0, handbrake: 0 })); }
   return [g, c];
 }
-for (const id of ['brutus', 'kaze', 'rhino']) {
+for (const id of (process.argv[2] ? process.argv[2].split(',') : ['brutus', 'kaze', 'rhino', 'vipera', 'brummi'])) {
   const out = [];
   for (const kmh of [50, 100, 160]) {
     const [g, c] = fresh(id, kmh);

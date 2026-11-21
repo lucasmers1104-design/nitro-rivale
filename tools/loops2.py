@@ -164,8 +164,44 @@ def measure_f0(loop, f_exp):
     return fr[i] + d * (fr[1] - fr[0])
 
 
-def tame(y):
-    """Grelle Spitzen abmildern: sanfter Tiefpass oben, 2,5–5 kHz leicht zurück."""
+def detone(y, loop=False, lo=1100, hi=12000, thr=7.0):
+    """Pfeiftöne entfernen: schmale Töne, die >thr dB über ihrer Umgebung (±220 Hz) liegen,
+    Bild für Bild auf Umgebungsniveau absenken (Turbolader-Pfeifen, Riemen-Sirren)."""
+    from scipy.signal import stft, istft
+    from scipy.ndimage import median_filter, maximum_filter1d
+    n = len(y)
+    x = np.concatenate([y, y, y]) if loop else y
+    N, H = 4096, 1024
+    f, t, Z = stft(x, SR, nperseg=N, noverlap=N - H, window='hann', boundary='even' if not loop else None, padded=True)
+    mag = np.abs(Z) + 1e-9
+    db = 20 * np.log10(mag)
+    w = int(220 / (f[1] - f[0]))
+    med = median_filter(db, size=(2 * w + 1, 1))
+    ex = db - med - thr
+    band = (f > lo) & (f < hi)
+    ex[~band, :] = 0
+    ex = np.clip(ex, 0, 35)
+    ex = maximum_filter1d(ex, size=5, axis=0)          # Nachbarbins mitnehmen
+    ex = (ex + np.roll(ex, 1, 1) + np.roll(ex, -1, 1)) / 3   # zeitlich glätten
+    if loop:
+        # konstante Tonhöhe: über die ganze Schleife gemittelt sind Pfeiftöne genau zu treffen
+        avg = 20 * np.log10(np.mean(mag, axis=1) + 1e-9)
+        lex = avg - median_filter(avg, size=2 * w + 1) - 4.0
+        lex[~band] = 0
+        lex = maximum_filter1d(np.clip(lex, 0, 30), size=5)
+        ex = np.maximum(ex, lex[:, None] + 3.0 * (lex[:, None] > 0))
+    Z = Z * 10 ** (-(ex + np.where(ex > 0, 2.0, 0)) / 20)
+    _, out = istft(Z, SR, nperseg=N, noverlap=N - H, window='hann', boundary=not loop)
+    if loop:
+        return out[n:2 * n].astype(np.float32)
+    out = out[:n]
+    if len(out) < n: out = np.pad(out, (0, n - len(out)))
+    return out.astype(np.float32)
+
+
+def tame(y, loop=False):
+    """Pfeiftöne raus, dann grelle Spitzen oben sanft abmildern."""
+    y = detone(y, loop=loop)
     sos = butter(2, 9000, 'low', fs=SR, output='sos')
     y = sosfiltfilt(sos, y)
     return y
@@ -192,13 +228,13 @@ def build(only=None):
                 tex = wsola_texture(segs, ft, n_t + int(0.2 * SR), cyc=8)
                 if tex is None: continue
                 loop, q = close_loop(tex, ft, n_t)
-                loop = tame(loop)
+                loop = tame(loop, loop=True)
                 fm = measure_f0(loop, ft)
                 loops[kind].append({'x': fm / flim, 'data': loop.astype(np.float32)})
                 mat = sum(len(s) for s in segs) / SR
                 report.append(f'{kind}{r:.2f}:{len(loop)/SR:.2f}s q{q:.2f} j{np.median(JOINS):.2f}'); JOINS.clear()
-        idle = make_loop(tame(x[int(1.75 * SR):int(4.65 * SR)]), int(0.08 * SR))
-        lim = make_loop(tame(x[int(b['limiter'][0] * SR):int(b['limiter'][1] * SR)]), int(0.04 * SR))
+        idle = tame(make_loop(x[int(1.75 * SR):int(4.65 * SR)], int(0.08 * SR)), loop=True)
+        lim = tame(make_loop(x[int(b['limiter'][0] * SR):int(b['limiter'][1] * SR)], int(0.04 * SR)), loop=True)
         PAD = int(0.08 * SR)
         buf = []; pos = [0]
         def put(arr): buf.append(arr); pos[0] += len(arr)

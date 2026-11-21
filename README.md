@@ -12,7 +12,7 @@ Mit Mehrspieler: `node server/server.mjs` starten und http://localhost:8080 öff
 
 ## Aufbau
 - `src/presets.js` – Datenblätter der Autos (Motor, Getriebe, Grip, Haltbarkeit)
-- `src/carmodel.js` – die drei Auto-Modelle (prozedurale Low-Poly-Karosserien mit bündigen, abnehmbaren Teilen)
+- `src/carmodel.js` – die fünf Auto-Modelle (prozedurale Low-Poly-Karosserien mit bündigen, abnehmbaren Teilen)
 - `src/car.js` – Raycast-Fahrwerk, Reifenmodell, Drift-Hilfen, Dellen/Schaden
 - `tools/viewer/` – Modell-Betrachter für Screenshots der Autos (`node tools/viewer/build.mjs`)
 - `src/world.js` – Strecke (Spline), Untergrund, Arena, Schanze, Requisiten
@@ -98,3 +98,16 @@ Läuft die Seite woanders als der Server, kann unter Einstellungen → „Spiels
   - Öl spritzt aus dem Heck, die Lache breitet sich mit Regenbogenfilm aus.
   - Schockwelle mit Bodenwelle, Druckkuppel, Staubwalze und Rissen.
   - Explosionen mit Feuerball-Blitz und Brandfleck.
+
+## Neu in v8: Neue Autos, Werkstatt, Power-ups, Hupe, Derby + Ausscheiden
+- **Neue Autos** (`src/carmodel.js`, gleiche Bauweise wie die anderen: Loft-Schale, bündige Teile, Radläufe, Kanzel):
+  - **Vipera GT** – Mittelmotor-Supersportler: Keilnase mit Kotflügel-Kuppen, weit vorn sitzende Kanzel, taillierte Flanken mit Lufteinlässen und Leitblechen, Lamellen-Motorabdeckung, Diffusor, Vierrohr-Auspuff.
+  - **Brummi** – Lieferwagen (~2,75 t): kurze Schnauze, hohe Kanzel, Schiebetür mit Laufschiene, Zierstreifen (passt sich dem Lack an), Dachsicken, Flügeltüren, Stahlfelgen.
+  - Modelle prüfen: `python3 tools/carshot.py vipera '#c8102e'` (6 Ansichten) bzw. mit Tuning: `python3 tools/carshot.py brummi - '{"aero":3,"engine":3,"armor":3,"tires":"offroad"}'`.
+- **Werkstatt / Tuning** (`src/tune.js`, Teile in `src/carmodel.js` → „Tuning-Teile“): Garage → TUNING.
+  - Aerodynamik (Abrisskante, GT-Flügel, Race-Doppelflügel + Splitter), Motor (Pilzfilter, Fächerkrümmer + dicke Endrohre, Kompressor/Hutze), Reifen (Semi-Slick, Drift, Gelände), Panzerung (Stahlschweller, Türplatten + Scheibengitter, Käfig + Rammplatte + Naben-Dorne), Hupe.
+  - Jedes Teil wirkt auf die Physik (`applyTune`): Drehmoment/Drehzahl, Abtrieb/Kurvengrip/Luftwiderstand, Grip je Untergrund, Haltbarkeit/Gewicht.
+  - **Leistungsklassen** D–X über einen Leistungsindex (PI). Einzelspieler und Lobby können eine Klasse vorgeben – zu starke Autos werden automatisch gedrosselt.
+- **Modi:** *Ausscheiden* (nach jeder Runde des Führenden fliegt der Letzte raus) und *Derby-Arena* (Last Man Standing mit Lebenspunkten, Bots mit eigener Derby-KI `DerbyDriver`). Online entscheidet beim Ausscheiden der Gastgeber, im Derby meldet jeder seine eigenen Autos (`out`-Nachricht, siehe `server/rooms.mjs`).
+- **Hinweis Server:** v8 braucht den neuen Server (neue Autos, Tuning, Modi) → in Coolify einmal „Redeploy“.
+- Tests: `node test-server.mjs`, `node test-powerups.mjs`, `node test-speed.mjs`, `node test4.mjs vipera,brummi`, `python3 browser-mp-derby.py`.

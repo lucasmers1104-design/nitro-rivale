@@ -117,6 +117,9 @@ export class BotDriver {
       if (allow < vT) vT = allow;
     }
     vT *= ctx.rubber || 1;
+    // in der Nebelwand sieht der Bot nichts: vom Gas, etwas unruhig
+    const fog = ctx.smoke ? ctx.smoke(p) : 0;
+    if (fog > 0.2) vT *= 1 - Math.min(0.4, fog * 0.45);
     const topCap = 90 * S.top;
     vT = Math.min(vT, topCap);
     let th = v < vT - 0.5 ? 1 : v < vT + 0.5 ? 0.4 : 0;
@@ -147,7 +150,87 @@ export class BotDriver {
       else if (it === 'shock') use = near.length > 0 || t > 10;
       else if (it === 'armor') use = near.length > 0 || t > 6;
       else if (it === 'repair') use = st.body < 60 || st.engine < 60 || t > 12;
+      else if (it === 'smoke' || it === 'spikes' || it === 'ramp') use = behind.length > 0 || t > 8;
+      else if (it === 'ram') use = ahead.some((o) => o.prog - ctx.myProg < 30) || near.length > 0 || t > 9;
+      else if (it === 'magnet') use = ahead.some((o) => o.prog - ctx.myProg > 15) || t > 10;
+      else if (it === 'emp') use = ahead.length > 0 || t > 8;
+      else if (it === 'ghost') use = near.length > 0 || ahead.some((o) => o.prog - ctx.myProg < 14) || t > 10;
       if (use && t > 0.8) { ctx.useItem(car); this.itemT = 0; }
+    } else this.itemT = 0;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Derby-Bot: sucht sich ein Opfer (nah, angeschlagen), zielt auf die Stelle, wo es
+// gleich sein wird, rammt mit Vollgas; am Arenarand zur Mitte, festgefahren -> rückwärts
+// ---------------------------------------------------------------------------
+export class DerbyDriver {
+  constructor(car, arena, skill = 'normal', seed = Math.random()) {
+    this.car = car;
+    this.A = arena;
+    this.s = SKILL[skill] || SKILL.normal;
+    this.seed = seed;
+    this.target = null; this.retargetT = 0;
+    this.stuckT = 0; this.revT = 0; this.revSteer = 0; this.itemT = 0; this.circleT = 0;
+    this.lastSteer = 0;
+  }
+  update(dt, ctx) {
+    const car = this.car, inp = car.input, A = this.A, S = this.s;
+    if (!ctx.running || car.out) { inp.throttle = ctx.rev && !car.out ? ctx.rev : 0; inp.brake = car.out ? 1 : 0; inp.steer = 0; inp.handbrake = car.out ? 1 : 0; return; }
+    const p = car.body.translation();
+    if (car.flipTimer > 1.6) { ctx.respawn(car); return; }
+    if (this.revT > 0) { this.revT -= dt; inp.throttle = 0; inp.brake = 1; inp.handbrake = 0; inp.steer = this.revSteer; return; }
+    if (inp.throttle > 0.5 && car.speedMs < 1.5) this.stuckT += dt; else this.stuckT = Math.max(0, this.stuckT - dt * 2);
+    if (this.stuckT > 1.1) { this.stuckT = 0; this.revT = 0.9 + Math.random() * 0.5; this.revSteer = -Math.sign(this.lastSteer || 1); return; }
+    // Ziel wählen
+    this.retargetT -= dt;
+    const others = ctx.cars.filter((o) => o.car !== car && !o.out);
+    if (!this.target || this.target.out || this.target.car.out || this.retargetT <= 0 || !others.some((o) => o.car === this.target.car)) {
+      let best = null, bs = 1e9;
+      for (const o of others) {
+        const op = o.car.body.translation();
+        const d = Math.hypot(op.x - p.x, op.z - p.z);
+        const hp = o.car.derbyHp ?? 100;
+        const sc = d * (0.75 + Math.random() * 0.5) + hp * 0.1 * S.line + (o.car.ghostOn ? 80 : 0);
+        if (sc < bs) { bs = sc; best = o; }
+      }
+      this.target = best; this.retargetT = 3 + Math.random() * 4;
+    }
+    let tx = A.x, tz = A.z, dist = 0;
+    if (this.target) {
+      const tc = this.target.car, tp = tc.body.translation(), tv = tc.body.linvel();
+      dist = Math.hypot(tp.x - p.x, tp.z - p.z);
+      const lead = Math.min(1.1, dist / 24) * S.line;
+      tx = tp.x + tv.x * lead; tz = tp.z + tv.z * lead;
+    }
+    // zu dicht und zu langsam für einen Treffer: Anlauf holen (kurz abdrehen)
+    this.circleT -= dt;
+    if (dist < 7 && car.speedMs < 6 && this.circleT <= 0 && Math.random() < dt * 0.8) this.circleT = 1.2;
+    if (this.circleT > 0) { tx = A.x + (A.x - p.x) * 0.2; tz = A.z + (A.z - p.z) * 0.2; }
+    // am Rand: zur Mitte ziehen
+    const rc = Math.hypot(p.x - A.x, p.z - A.z);
+    if (rc > A.r - 8) { const k = clamp((rc - (A.r - 8)) / 5, 0, 0.85); tx = tx * (1 - k) + A.x * k; tz = tz * (1 - k) + A.z * k; }
+    _t.set(tx - p.x, 0, tz - p.z).normalize();
+    _f.set(0, 0, -1).applyQuaternion(car.root.quaternion).setY(0).normalize();
+    const err = Math.atan2(_f.x * _t.z - _f.z * _t.x, _f.x * _t.x + _f.z * _t.z);
+    const steer = clamp(-err * 2.4, -1, 1);
+    this.lastSteer = steer;
+    const v = car.vLong;
+    // weit daneben: erst eindrehen (wenig Gas), sonst Vollgas
+    let th = Math.abs(err) > 1.3 && v > 9 ? 0.25 : 1;
+    if (S.top < 0.9 && v > 24) th = 0.6;
+    inp.throttle = th; inp.brake = 0; inp.steer = steer;
+    inp.handbrake = Math.abs(err) > 1.6 && v > 7 ? 1 : 0;
+    // Power-ups: sofort einsetzen, wenn sinnvoll
+    if (car.item && !car.itemRoll) {
+      this.itemT += dt;
+      const it = car.item, near = dist < 12;
+      let use = this.itemT > 3;
+      if (it === 'repair') use = car.derbyHp < 55;
+      else if (it === 'nitro' || it === 'ram') use = Math.abs(err) < 0.25 && dist < 28;
+      else if (it === 'rocket' || it === 'emp' || it === 'magnet') use = Math.abs(err) < 0.4 || this.itemT > 4;
+      else if (it === 'shock' || it === 'armor') use = near;
+      if (use && this.itemT > 0.6) { ctx.useItem(car); this.itemT = 0; }
     } else this.itemT = 0;
   }
 }
