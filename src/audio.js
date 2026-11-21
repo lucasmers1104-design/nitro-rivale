@@ -13,7 +13,10 @@ export class GameAudio {
     this.comp = c.createDynamicsCompressor();
     this.comp.threshold.value = -14;
     this.comp.ratio.value = 4;
-    this.master.connect(this.comp).connect(c.destination);
+    // Gegen Schärfe: Höhen ab 6 kHz leicht zurück, ganz oben sanft abschneiden
+    this.hs = c.createBiquadFilter(); this.hs.type = 'highshelf'; this.hs.frequency.value = 6000; this.hs.gain.value = -3;
+    this.lpMaster = c.createBiquadFilter(); this.lpMaster.type = 'lowpass'; this.lpMaster.frequency.value = 12500; this.lpMaster.Q.value = 0.5;
+    this.master.connect(this.hs).connect(this.lpMaster).connect(this.comp).connect(c.destination);
     this.muted = false;
     // Rauschpuffer
     const len = c.sampleRate * 2;
@@ -127,21 +130,28 @@ export class GameAudio {
     const wf = c.createBiquadFilter(); wf.type = 'lowpass'; wf.frequency.value = 650;
     this.loop(this.noise).connect(wf).connect(this.wind).connect(this.master);
     this.windF = wf;
-    // Reifenquietschen: zwei Dreieck-Oszillatoren mit Vibrato + Rauschband
+    // Reifenquietschen: Rauschbänder (Gummi auf Asphalt) mit leicht tonalem Anteil – nicht pfeifend
     this.squeal = c.createGain(); this.squeal.gain.value = 0;
-    const bp = c.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1050; bp.Q.value = 2.5;
-    this.squealOsc = [c.createOscillator(), c.createOscillator()];
-    this.squealOsc[0].type = 'triangle'; this.squealOsc[0].frequency.value = 690;
-    this.squealOsc[1].type = 'triangle'; this.squealOsc[1].frequency.value = 1037;
-    const vib = c.createOscillator(); vib.frequency.value = 7.5;
-    const vibG = c.createGain(); vibG.gain.value = 22;
-    vib.connect(vibG);
-    for (const o of this.squealOsc) { vibG.connect(o.frequency); const g = c.createGain(); g.gain.value = 0.18; o.connect(g).connect(bp); o.start(); }
-    vib.start();
-    const nb = c.createBiquadFilter(); nb.type = 'bandpass'; nb.frequency.value = 1700; nb.Q.value = 1.2;
-    const ng = c.createGain(); ng.gain.value = 0.5;
-    this.loop(this.noise).connect(nb).connect(ng).connect(bp);
-    bp.connect(this.squeal).connect(this.master);
+    const sqLp = c.createBiquadFilter(); sqLp.type = 'lowpass'; sqLp.frequency.value = 3400; sqLp.Q.value = 0.4;
+    this.sqBand = c.createBiquadFilter(); this.sqBand.type = 'bandpass'; this.sqBand.frequency.value = 1050; this.sqBand.Q.value = 4;
+    const sqG1 = c.createGain(); sqG1.gain.value = 1.4;
+    this.loop(this.noise).connect(this.sqBand).connect(sqG1).connect(sqLp);
+    this.sqBand2 = c.createBiquadFilter(); this.sqBand2.type = 'bandpass'; this.sqBand2.frequency.value = 2150; this.sqBand2.Q.value = 6;
+    const sqG2 = c.createGain(); sqG2.gain.value = 0.45;
+    this.loop(this.noise).connect(this.sqBand2).connect(sqG2).connect(sqLp);
+    // ganz leiser Ton für den typischen "Singen"-Charakter, mit langsamem Wabern
+    this.sqTone = c.createOscillator(); this.sqTone.type = 'sine'; this.sqTone.frequency.value = 1000;
+    const vib = c.createOscillator(); vib.frequency.value = 5.3;
+    const vibG = c.createGain(); vibG.gain.value = 14;
+    vib.connect(vibG).connect(this.sqTone.frequency);
+    const sqTg = c.createGain(); sqTg.gain.value = 0.05;
+    this.sqTone.connect(sqTg).connect(sqLp);
+    this.sqTone.start(); vib.start();
+    // ungleichmäßiges Rattern des Gummis (Amplitude moduliert)
+    this.sqAm = c.createGain(); this.sqAm.gain.value = 0.75;
+    const am = c.createOscillator(); am.frequency.value = 23; const amG = c.createGain(); amG.gain.value = 0.25;
+    am.connect(amG).connect(this.sqAm.gain); am.start();
+    sqLp.connect(this.sqAm).connect(this.squeal).connect(this.master);
     // Schotter/Gras-Rumpeln
     this.rumble = c.createGain(); this.rumble.gain.value = 0;
     const rf = c.createBiquadFilter(); rf.type = 'lowpass'; rf.frequency.value = 380;
@@ -268,10 +278,11 @@ export class GameAudio {
     }
     const sp = car.speedMs || 0;
     const onGrass = car.onGrass;
-    const sq = active && !onGrass ? clamp((car.slipMax - 3) / 9, 0, 1) : 0;
-    this.squeal.gain.setTargetAtTime(sq * 0.26, t, 0.05);
-    this.squealOsc[0].frequency.setTargetAtTime(640 + sq * 120, t, 0.08);
-    this.squealOsc[1].frequency.setTargetAtTime(980 + sq * 160, t, 0.08);
+    const sq = active && !onGrass ? clamp((car.slipMax - 3.5) / 10, 0, 1) : 0;
+    this.squeal.gain.setTargetAtTime(sq * sq * 0.2 + sq * 0.05, t, 0.07);
+    this.sqBand.frequency.setTargetAtTime(900 + sq * 320, t, 0.12);
+    this.sqBand2.frequency.setTargetAtTime(1900 + sq * 500, t, 0.12);
+    this.sqTone.frequency.setTargetAtTime(880 + sq * 260, t, 0.15);
     this.rumble.gain.setTargetAtTime(active && onGrass ? clamp(sp / 25, 0, 1) * 0.35 : 0, t, 0.06);
     this.wind.gain.setTargetAtTime(active ? clamp(sp / 70, 0, 1) ** 2 * 0.3 : 0, t, 0.1);
     this.windF.frequency.setTargetAtTime(400 + sp * 12, t, 0.1);
@@ -316,7 +327,8 @@ export class GameAudio {
     }
   }
   shift(up) {
-    this.burst({ dur: 0.05, freq: 260, gain: 0.25 });
+    if (this.engine?.kind === 'loops') this.engine.shift(up);
+    this.burst({ dur: 0.05, freq: 220, gain: 0.16 });
     if (!up) this.tone({ freq: 70, to: 110, dur: 0.12, gain: 0.12, type: 'sawtooth' });
   }
   crash(s = 1) {
@@ -380,12 +392,12 @@ export class GameAudio {
   sfx(name, k = 1) {
     const t = (o) => this.tone(o), b = (o) => this.burst(o);
     switch (name) {
-      case 'beep': t({ freq: 440, dur: 0.32, gain: 0.22, type: 'square' }); t({ freq: 880, dur: 0.32, gain: 0.05, type: 'sine' }); break;
-      case 'go': t({ freq: 880, dur: 0.75, gain: 0.24, type: 'square' }); t({ freq: 1760, dur: 0.75, gain: 0.06, type: 'sine' }); break;
+      case 'beep': t({ freq: 440, dur: 0.34, gain: 0.26, type: 'triangle' }); t({ freq: 880, dur: 0.3, gain: 0.06, type: 'sine' }); t({ freq: 220, dur: 0.3, gain: 0.08, type: 'sine' }); break;
+      case 'go': t({ freq: 880, dur: 0.8, gain: 0.26, type: 'triangle' }); t({ freq: 440, dur: 0.8, gain: 0.12, type: 'triangle' }); t({ freq: 1760, dur: 0.6, gain: 0.04, type: 'sine' }); break;
       case 'pickup': [660, 990, 1320].forEach((f, i) => t({ freq: f, dur: 0.12, gain: 0.09, type: 'triangle', delay: i * 0.05 })); b({ dur: 0.25, freq: 6000, type: 'highpass', gain: 0.12 }); break;
-      case 'tick': t({ freq: 1200 + Math.random() * 400, dur: 0.04, gain: 0.05, type: 'square' }); break;
+      case 'tick': t({ freq: 1100 + Math.random() * 300, dur: 0.035, gain: 0.05, type: 'triangle' }); break;
       case 'got': t({ freq: 523, to: 1046, dur: 0.18, gain: 0.12, type: 'triangle' }); t({ freq: 784, dur: 0.25, gain: 0.07, type: 'sine', delay: 0.1 }); break;
-      case 'nitro': b({ dur: 1.6, freq: 900, sweepTo: 4200, type: 'bandpass', q: 0.8, gain: 0.45 }); t({ freq: 90, to: 160, dur: 1.2, gain: 0.25, type: 'sawtooth' }); break;
+      case 'nitro': b({ dur: 1.5, freq: 700, sweepTo: 2600, type: 'bandpass', q: 0.8, gain: 0.4 }); b({ dur: 1.2, freq: 260, type: 'lowpass', gain: 0.35 }); t({ freq: 70, to: 120, dur: 1.2, gain: 0.22, type: 'triangle' }); break;
       case 'jump': t({ freq: 180, to: 720, dur: 0.35, gain: 0.25, type: 'triangle' }); b({ dur: 0.2, freq: 1500, gain: 0.25 }); break;
       case 'drop': t({ freq: 220, to: 110, dur: 0.18, gain: 0.25, type: 'triangle' }); b({ dur: 0.12, freq: 900, gain: 0.2 }); break;
       case 'oil': b({ dur: 0.5, freq: 500, type: 'lowpass', gain: 0.35 }); t({ freq: 300, to: 120, dur: 0.6, gain: 0.12, type: 'sine' }); break;
@@ -399,13 +411,15 @@ export class GameAudio {
         break;
       }
       case 'shock': t({ freq: 140, to: 40, dur: 0.6, gain: 0.7, type: 'sine' }); b({ dur: 0.6, freq: 300, sweepTo: 5000, type: 'bandpass', q: 0.7, gain: 0.35 }); break;
-      case 'armor': [392, 523, 659, 784].forEach((f, i) => t({ freq: f, dur: 0.25, gain: 0.08, type: 'square', delay: i * 0.06 })); t({ freq: 1500, dur: 0.6, gain: 0.05, type: 'sine', delay: 0.25 }); break;
+      case 'armor': [392, 523, 659, 784].forEach((f, i) => t({ freq: f, dur: 0.25, gain: 0.09, type: 'triangle', delay: i * 0.06 })); t({ freq: 1500, dur: 0.6, gain: 0.05, type: 'sine', delay: 0.25 }); break;
       case 'repair': for (let i = 0; i < 6; i++) b({ dur: 0.03, freq: 3500, type: 'bandpass', q: 4, gain: 0.18, delay: i * 0.07 }); [523, 659, 784, 1046].forEach((f, i) => t({ freq: f, dur: 0.18, gain: 0.08, type: 'triangle', delay: 0.45 + i * 0.07 })); break;
+      case 'miniturbo': b({ dur: 0.55 + k * 0.12, freq: 500, sweepTo: 2400, type: 'bandpass', q: 0.9, gain: 0.22 + k * 0.06 }); b({ dur: 0.3, freq: 180, type: 'lowpass', gain: 0.3 }); break;
+      case 'charge': t({ freq: [0, 660, 880, 1175][k] || 880, dur: 0.12, gain: 0.06, type: 'triangle' }); break;
       case 'lap': [784, 988].forEach((f, i) => t({ freq: f, dur: 0.16, gain: 0.1, type: 'triangle', delay: i * 0.12 })); break;
-      case 'final': [659, 784, 988, 1318].forEach((f, i) => t({ freq: f, dur: 0.18, gain: 0.11, type: 'square', delay: i * 0.1 })); break;
-      case 'finish': [523, 659, 784, 1046, 784, 1046].forEach((f, i) => t({ freq: f, dur: i === 5 ? 0.7 : 0.16, gain: 0.12, type: 'square', delay: i * 0.13 })); break;
-      case 'wrong': t({ freq: 330, dur: 0.18, gain: 0.12, type: 'square' }); t({ freq: 247, dur: 0.25, gain: 0.12, type: 'square', delay: 0.2 }); break;
-      case 'error': t({ freq: 220, to: 180, dur: 0.25, gain: 0.15, type: 'square' }); break;
+      case 'final': [659, 784, 988, 1318].forEach((f, i) => t({ freq: f, dur: 0.2, gain: 0.13, type: 'triangle', delay: i * 0.1 })); break;
+      case 'finish': [523, 659, 784, 1046, 784, 1046].forEach((f, i) => t({ freq: f, dur: i === 5 ? 0.8 : 0.17, gain: 0.14, type: 'triangle', delay: i * 0.13 })); break;
+      case 'wrong': t({ freq: 330, dur: 0.2, gain: 0.15, type: 'triangle' }); t({ freq: 247, dur: 0.28, gain: 0.15, type: 'triangle', delay: 0.2 }); break;
+      case 'error': t({ freq: 220, to: 180, dur: 0.25, gain: 0.18, type: 'triangle' }); break;
     }
   }
 }
@@ -434,10 +448,14 @@ export class LoopEngine {
     this.kind = 'loops';
     const c = this.ctx;
     this.out = c.createGain(); this.out.gain.value = 0;
-    // Klang: etwas mehr Bass (Blubbern), harte Mitten leicht zurück
-    const low = c.createBiquadFilter(); low.type = 'lowshelf'; low.frequency.value = 160; low.gain.value = 5;
-    const mid = c.createBiquadFilter(); mid.type = 'peaking'; mid.frequency.value = 3200; mid.Q.value = 0.8; mid.gain.value = -2.5;
-    this.out.connect(low).connect(mid).connect(dest || audio.master);
+    this.gain = bank.gain ?? 1;          // Lautheit der Aufnahme angeglichen (sonst ist z. B. der Turbo viel lauter)
+    this.liftGain = bank.liftGain ?? 0.55;
+    // Klang: etwas mehr Bass (Blubbern), harte Mitten zurück, Höhen je nach Aufnahme gezähmt
+    const low = c.createBiquadFilter(); low.type = 'lowshelf'; low.frequency.value = 160; low.gain.value = 4.5;
+    const mid = c.createBiquadFilter(); mid.type = 'peaking'; mid.frequency.value = 3200; mid.Q.value = 0.8; mid.gain.value = -3;
+    const shelf = c.createBiquadFilter(); shelf.type = 'highshelf'; shelf.frequency.value = 2800; shelf.gain.value = bank.shelf ?? -1.5;
+    this.tone = c.createBiquadFilter(); this.tone.type = 'lowpass'; this.tone.frequency.value = 9000; this.tone.Q.value = 0.5;
+    this.out.connect(low).connect(mid).connect(shelf).connect(this.tone).connect(dest || audio.master);
     this.voices = [];
     const mk = (L, x, kind) => {
       const src = c.createBufferSource();
@@ -454,18 +472,22 @@ export class LoopEngine {
     this.idle = mk(bank.idle, this.E.idle / this.E.redline, 'idle');
     this.lim = mk(bank.limiter, 1, 'lim');
     this.load = 0; this.prevThrottle = 0; this.duckOff = 0; this.duckIdle = 0;
+    this.heldT = 0; this.lastLift = -9; this.cut = 0;
   }
-  oneShot(region, gain = 1, rate = 1, when = null) {
+  // Hochschalten unter Last: Zündung kurz unterbrochen ("bap") wie beim echten Gangwechsel
+  shift(up) { if (up && this.load > 0.5) this.cut = 0.085; }
+  oneShot(region, gain = 1, rate = 1, when = null, viaEngine = false) {
     const r = this.bank.regions[region];
     if (!r) return 0;
     const c = this.ctx, src = c.createBufferSource();
     src.buffer = this.buf; src.playbackRate.value = rate;
     const g = c.createGain(); g.gain.value = gain;
-    src.connect(g).connect(this.a.master);
+    // über die Motor-Filter (gleiche Klangfarbe, folgt der Motorlautstärke)
+    src.connect(g).connect(viaEngine ? this.out : this.a.master);
     src.start((when ?? c.currentTime) + 0.01, r[0], r[1]);
     return r[1] / rate;
   }
-  start(when = null) { this.duckIdle = this.oneShot('start', 0.9, 1, when) * 0.85; }
+  start(when = null) { this.duckIdle = this.oneShot('start', 0.85 * this.gain, 1, when) * 0.85; }
   // Gewichte für eine Loop-Gruppe: die zwei Loops links/rechts von x, gleichleistungs-überblendet
   spread(list, x, total, out) {
     if (!list.length) return;
@@ -482,19 +504,27 @@ export class LoopEngine {
     const x = Math.max(0.05, car.rpm / E.redline);
     const xIdle = E.idle / E.redline;
     const thr = car.gear === -1 ? car.input.brake : car.input.throttle;
-    const loadT = car.limiterCut ? 0.9 : thr > 0.05 ? Math.min(1, 0.55 + thr * 0.45) : 0;
-    this.load += (loadT - this.load) * Math.min(1, dt * (loadT > this.load ? 22 : 12));
-    if (active && !this.quiet && this.prevThrottle > 0.5 && thr < 0.1 && x > 0.55) {
-      const d = this.oneShot('lift', 0.8, 0.96 + Math.random() * 0.08, now);
-      this.duckOff = Math.max(this.duckOff, d * 0.55);
+    this.cut = Math.max(0, this.cut - dt);
+    let loadT = car.limiterCut ? 0.9 : thr > 0.05 ? Math.min(1, 0.55 + thr * 0.45) : 0;
+    if (this.cut > 0) loadT = 0.12;
+    this.load += (loadT - this.load) * Math.min(1, dt * (loadT > this.load ? 22 : this.cut > 0 ? 40 : 12));
+    this.heldT = thr > 0.5 ? this.heldT + dt : 0;
+    // Gas weg: Abblasen/Nachbrennen nur nach echtem Vollgas-Zug und nicht im Sekundentakt
+    if (active && !this.quiet && this.prevThrottle > 0.5 && thr < 0.1 && x > 0.6 && this.heldTPrev > 0.45 && now - this.lastLift > 1.6) {
+      const d = this.oneShot('lift', this.liftGain * 0.9, 0.96 + Math.random() * 0.08, now, true);
+      this.lastLift = now;
+      this.duckOff = Math.max(this.duckOff, d * 0.5);
     }
+    this.heldTPrev = this.heldT;
     this.prevThrottle = thr;
     this.duckOff = Math.max(0, this.duckOff - dt);
     this.duckIdle = Math.max(0, this.duckIdle - dt);
     const health = 0.82 + 0.18 * (car.engineHp / 100);
-    this.out.gain.setTargetAtTime(active ? 0.9 * health : 0, now, 0.08);
+    this.out.gain.setTargetAtTime(active ? 1.1 * health * this.gain : 0, now, 0.08);
+    // weniger Last = dumpfer (Schub klingt gedeckter, Vollgas offen)
+    this.tone.frequency.setTargetAtTime(5200 + 4800 * this.load, now, 0.06);
     const target = new Map();
-    const wIdle = 1 - sstep(x, xIdle + 0.05, xIdle + 0.22);
+    const wIdle = 1 - sstep(x, xIdle + 0.03, xIdle + 0.15);
     const base = 1 - wIdle;
     const atLim = x > 0.975 && thr > 0.5;
     const onW = base * Math.sqrt(this.load) * (atLim ? 0.55 : 1);
@@ -507,8 +537,8 @@ export class LoopEngine {
       const w = active ? target.get(v) || 0 : 0;
       if (Math.abs(w - v.w) > 0.002) { v.g.gain.setTargetAtTime(w, now, 0.035); v.w = w; }
       let rate = 1;
-      if (v.kind === 'on' || v.kind === 'off') rate = Math.min(1.6, Math.max(0.6, x / v.x));
-      else if (v.kind === 'idle') rate = Math.min(1.9, Math.max(0.85, x / v.x));
+      if (v.kind === 'on' || v.kind === 'off') rate = Math.min(1.6, Math.max(0.5, x / v.x));
+      else if (v.kind === 'idle') rate = Math.min(1.3, Math.max(0.9, x / v.x)); // nie Micky-Maus-Leerlauf
       if (w > 0.001 || v.lastRate === undefined) { v.src.playbackRate.setTargetAtTime(rate, now, 0.02); v.lastRate = rate; }
     }
   }

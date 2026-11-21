@@ -3,6 +3,7 @@
 // ---------------------------------------------------------------------------
 import * as THREE from 'three';
 import { createFlame, updateFlame } from './fx.js';
+import { OilFx, BlastFx } from './itemfx.js';
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 
@@ -89,6 +90,8 @@ export class Items {
     this.matOil = new THREE.MeshStandardMaterial({ color: 0x0b0b10, roughness: 0.05, metalness: 0.9, transparent: true, opacity: 0.92, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3, envMap: game.envMap, envMapIntensity: 1.2 });
     this.matRocket = new THREE.MeshStandardMaterial({ color: 0xf2efe8, flatShading: true, roughness: 0.4, metalness: 0.3 });
     this.matFin = new THREE.MeshStandardMaterial({ color: 0xd9322b, flatShading: true });
+    this.oilFx = new OilFx(this.group, track, game.envMap);
+    this.blastFx = new BlastFx(this.group, track, game);
   }
 
   // Zufallsgewinn; rankFrac: 0 = Führender, 1 = Letzter
@@ -132,10 +135,20 @@ export class Items {
     }
     for (const c of cars) if (c.car.itemRoll > 0) { c.car.itemRoll = Math.max(0, c.car.itemRoll - dt); if (c.car.itemRoll === 0) this.events.push({ type: 'rolled', car: c.car }); }
 
+    this.oilFx?.update(dt);
+    this.blastFx?.update(dt);
     // Gefahren: Ölflecken + Sprengfässer
     for (let k = this.hazards.length - 1; k >= 0; k--) {
       const h = this.hazards[k];
       h.age += dt;
+      if (h.type === 'oil') {
+        // Lache läuft erst aus und breitet sich aus
+        const gr = 1 - Math.pow(1 - clamp((h.age - 0.12) / 1.1, 0, 1), 3);
+        h.grow = gr;
+        const sc = 0.06 + 0.94 * gr;
+        h.mesh.scale.set(sc, 1, sc);
+        if (h.mesh.userData.film) h.mesh.userData.film.material.opacity = 0.8 * clamp((h.life - h.age) / 3, 0, 1) * (0.75 + 0.25 * Math.sin(t * 1.7 + h.pos.x));
+      }
       if (h.type === 'barrel') {
         this.matBlink.emissiveIntensity = Math.sin(t * 12) > 0 ? 4 : 0;
         h.mesh.rotation.y += dt * 0.4;
@@ -149,7 +162,7 @@ export class Items {
           const p = c.car.body.translation();
           const d = Math.hypot(p.x - h.pos.x, p.z - h.pos.z);
           if (Math.abs(p.y - h.pos.y) > 2.5) continue;
-          if (h.type === 'oil' && d < h.r) {
+          if (h.type === 'oil' && d < h.r * Math.max(0.35, h.grow ?? 1)) {
             if (c.car.oilT <= 0) { c.car.spinDir = Math.random() < 0.5 ? -1 : 1; this.events.push({ type: 'oil', car: c.car }); }
             c.car.oilT = 1.5;
           }
@@ -236,6 +249,7 @@ export class Items {
     }
     this.events.push({ type: 'boom', pos: pos.clone(), power });
     this.flash(pos, 0xff8a2a, radius * 0.9);
+    this.blastFx?.blast(pos, radius);
     for (const car of this.g.cars?.() || []) {
       if (!this.owned(car)) continue;
       const p = car.body.translation();
@@ -272,12 +286,10 @@ export class Items {
   // ---- Erzeuger (lokal und für Ereignisse anderer Spieler)
   spawnOil(pos, id, owner) {
     const r = 3.6;
-    const mesh = new THREE.Mesh(new THREE.CircleGeometry(r, 18).rotateX(-Math.PI / 2), this.matOil.clone());
+    const mesh = this.oilFx.puddle(pos, r, this.matOil.clone());
     mesh.position.copy(pos).y += 0.07;
-    const g = mesh.geometry.attributes.position;
-    for (let k = 0; k < g.count; k++) g.setY(k, this.track.heightAt(pos.x + g.getX(k), pos.z + g.getZ(k)) - pos.y);
-    g.needsUpdate = true;
     this.group.add(mesh);
+    this.oilFx.stream(owner, 0.65);   // Öl spritzt aus dem Heck
     this.hazards.push({ type: 'oil', id, pos: pos.clone(), r, mesh, age: 0, life: 22, owner });
   }
   spawnBarrel(pos, id, owner) {
@@ -312,7 +324,7 @@ export class Items {
     this.rockets.push({ id, pos: start.clone(), dir: dir.clone().normalize(), speed, mesh: grp, flame, age: 0, owner, target, smokeAcc: 0 });
   }
   shockAt(pos, owner) {
-    this.flash(pos.clone().setY(pos.y - 0.4), 0x7fd6ff, 15);
+    this.blastFx.shock(pos, 16);
     for (const o of this.g.cars?.() || []) {
       if (o === owner || !this.owned(o)) continue;
       const p = o.body.translation();
@@ -326,7 +338,7 @@ export class Items {
       o.applyImpact(new THREE.Vector3(p.x, p.y, p.z).addScaledVector(dir, -o.p.dims.w * 0.5), dir, 5 + 9 * k);
       this.events.push({ type: 'hit', car: o, by: owner, kind: 'shock' });
     }
-    this.g.fx.sparks.burst(pos, 40, { speed: 12, spread: 1, life: 0.5 });
+    this.g.fx.sparks.burst(pos, 30, { speed: 12, spread: 1, life: 0.45, color: 0x9fe4ff });
   }
 
   // Power-up einsetzen; ahead: Auto direkt vor dem Nutzer (Raketenziel)
@@ -391,11 +403,13 @@ export class Items {
     for (const r of this.rockets) this.group.remove(r.mesh);
     for (const r of this.rings) this.group.remove(r.mesh);
     this.hazards = []; this.rockets = []; this.rings = [];
+    this.oilFx?.clear(); this.blastFx?.clear();
     for (const b of this.boxes) { b.off = 0; b.mesh.visible = true; }
   }
 
   dispose() {
     this.clear();
+    this.oilFx?.dispose(); this.blastFx?.dispose();
     this.g.scene.remove(this.group);
     this.group.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
   }

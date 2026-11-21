@@ -866,7 +866,11 @@ async function main() {
       body.innerHTML = `<div class="keysGrid">
         <span><kbd>W</kbd><kbd>S</kbd></span><span>Gas · Bremse / Rückwärts</span>
         <span><kbd>A</kbd><kbd>D</kbd></span><span>Lenken (Pfeiltasten gehen auch)</span>
-        <span><kbd>Leertaste</kbd></span><span>Handbremse: antippen = Drift, Gas halten = Drift halten</span>
+        <span><kbd>Leertaste</kbd></span><span>Handbremse antippen = Drift starten · Gas halten = Drift halten</span>
+        <span>Im Drift</span><span>In die Kurve lenken = mehr Winkel · gegenlenken oder Gas weg = wieder greifen</span>
+        <span>Schwung-Wechsel</span><span>Im Drift in die andere Richtung lenken und Handbremse antippen</span>
+        <span>Power-Slide</span><span>Brutus &amp; Kaze: Vollgas + voll einlenken in schnellen Kurven</span>
+        <span>Mini-Turbo</span><span>Lange sauber driften: Funken blau → orange → lila. Beim Rausgehen gibt's Schub!</span>
         <span><kbd>E</kbd> oder <kbd>Shift</kbd></span><span>Power-up einsetzen</span>
         <span><kbd>R</kbd></span><span>Zurück auf die Strecke</span>
         <span><kbd>F</kbd></span><span>Reparieren (nicht im Rennen)</span>
@@ -1687,7 +1691,7 @@ async function main() {
     tmpD.copy(tmpF);
     if (sp > 4 && car.vLong > 1) tmpD.lerp(tmpV.normalize(), 0.3).normalize();
     const p = car.root.position;
-    const stretch = clamp(car.accLong * 0.07, -0.5, 1.1);
+    const stretch = clamp(car.accLong * 0.045, -0.4, 0.6); // v7: weniger Zurückweichen beim Beschleunigen
     const dist = (far ? 9.8 : 6.6) + stretch, hgt = (far ? 3.9 : 2.6) - stretch * 0.15;
     out.copy(p).addScaledVector(tmpD, -dist);
     out.y = p.y + hgt;
@@ -1770,7 +1774,8 @@ async function main() {
         camera.position.copy(camPos);
         camera.lookAt(camLook);
       }
-      fovT = 60 + clamp(car.speed - 40, 0, 220) * 0.095 + clamp(car.accLong, 0, 12) * 0.45 + (car.nitro > 0 ? 9 : 0);
+      // Tempo-Zoom: spürbar, aber nicht mehr so weit (vorher bis ~89°, jetzt höchstens 76°)
+      fovT = Math.min(76, 60 + clamp(car.speed - 40, 0, 220) * 0.055 + clamp(car.accLong, 0, 12) * 0.25 + (car.nitro > 0 ? 5 : 0));
       if (cfg.shake && car.speed > 110 && state.cam !== 2) camera.position.add(tmpV.set(Math.random() - 0.5, Math.random() - 0.5, 0).multiplyScalar((car.speed - 110) * 0.00025));
     }
     camera.fov += (fovT - camera.fov) * Math.min(1, dt * 3);
@@ -1904,6 +1909,8 @@ async function main() {
         if (e.type === 'pop') { if (!real) audio?.pop(e.strength); }
         else if (e.type === 'blowoff') { if (!real) audio?.blowoff(e.amount, e.flutter); }
         else if (e.type === 'shift') audio?.shift(e.up);
+        else if (e.type === 'miniturbo') { audio?.sfx('miniturbo', e.level); bigMsg(`<small>MINI-TURBO${' +'.repeat(e.level - 1)}</small>`, 'gold', 0.9); }
+        else if (e.type === 'driftlevel') audio?.sfx('charge', e.level);
         else if (e.type === 'glass') audio?.glass();
         else if (e.type === 'scrape') audio?.scrape();
         else if (e.type === 'crash' && state.mode !== 'race') for (const l of e.labels) toast(l, 'bad');

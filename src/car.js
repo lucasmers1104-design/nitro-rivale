@@ -164,6 +164,9 @@ export class Car {
     this.steerIn = 0;
     this.driftF = 0;
     this.drifting = false;
+    this.hbT = 9; this.flipped = false;
+    this.driftCharge = 0; this.driftLevel = 0; this.wasDrifting = false; this.miniTurbo = 0;
+    this.driftDir = 1; this.driftV0 = 0; this.driftTarget = 0; this.pathRate = 0; this.prevVH = null; this.hbPrev = false; this.powerT = 0;
     this.flame = 0;
     this.gear = 1;
     this.rpm = preset.engine.idle;
@@ -194,6 +197,7 @@ export class Car {
     this.prevVLong = 0; this.accLong = 0;
   }
 
+  startDrift(dir, speed) { this.driftDir = dir || 1; this.driftV0 = speed; }
   spawn(pos, yaw) {
     _q.setFromAxisAngle(WORLD_UP, yaw);
     this.body.setTranslation({ x: pos.x, y: pos.y, z: pos.z }, true);
@@ -242,7 +246,7 @@ export class Car {
     const Iyy = (m / 12) * (P.dims.w ** 2 + P.dims.l ** 2);
     this.oilT = Math.max(0, this.oilT - dt); this.armorT = Math.max(0, this.armorT - dt);
     const oil = this.oilT > 0 ? 0.28 : 1;
-    const aMax = 1.28 * g.gravity * P.grip; // maximale Querbeschleunigung
+    const aMax = 1.5 * g.gravity * P.grip; // maximale Querbeschleunigung (v7: mehr Kurvengrip)
 
     // Dummies schlafen lassen, wenn sie ruhig stehen
     if (!this.active) {
@@ -262,17 +266,56 @@ export class Car {
     const handbrake = inp.handbrake;
     const bodySlip = Math.atan2(vLat, Math.max(absV, 1)); // >0: Auto rutscht nach rechts weg
     const slipDeg = Math.abs(bodySlip) * 57.3;
+    // Drehrate der Bahn (wie schnell sich die Fahrtrichtung dreht) – Grundlage der Drift-Regelung
+    const vH = Math.hypot(lin.x, lin.z);
+    if (vH > 2) {
+      const head = Math.atan2(-lin.x, -lin.z);
+      if (this.prevVH != null) {
+        let dh = head - this.prevVH; dh -= Math.round(dh / (2 * Math.PI)) * 2 * Math.PI;
+        this.pathRate += (dh / dt - this.pathRate) * Math.min(1, dt * 14);
+      }
+      this.prevVH = head;
+    } else { this.prevVH = null; this.pathRate = 0; }
 
-    // ---- Drift-Zustand: nur per Handbremse auslösbar, endet von selbst
+    // ---- Drift-Zustand: Handbremse kickt das Heck raus, Hecktriebler auch per Vollgas + vollem Einschlag
+    const hbEdge = handbrake > 0.5 && !this.hbPrev;
+    this.hbPrev = handbrake > 0.5;
+    this.hbT = handbrake > 0.5 ? (hbEdge ? 0 : this.hbT + dt) : 9;
+    if (hbEdge) this.flipped = false;
+    const rwd = P.drive === 'RWD';
+    // Power-Slide nur bei echtem Kurventempo am Grip-Limit (kein Donut beim Anfahren)
+    const atLimit = Math.abs(yawRate * vLong) > 0.72 * aMax;
+    if (Math.abs(this.steerIn) > 0.85 && drive > 0.9 && vLong > 14 && vLong < 42 && rwd && this.gear > 0 && atLimit) this.powerT += dt; else this.powerT = 0;
     if (handbrake > 0.5 && absV > 7 && this.gear > 0) {
+      if (!this.flipped && this.hbT < 0.3 && this.driftF >= 0.05 && Math.abs(inp.steer) > 0.5 && Math.sign(inp.steer) !== this.driftDir) {
+        this.flipped = true; this.flipT = 1.0;
+        this.driftDir = Math.sign(inp.steer);             // Schwung-Wechsel per Handbremse
+        b.applyTorqueImpulse(_imp.copy(_up).multiplyScalar(Iyy * this.driftDir * Math.min(1.6, absV * 0.05)), true);
+      }
+      if (this.driftF < 0.05) this.startDrift(Math.abs(this.steerIn) > 0.15 ? Math.sign(this.steerIn) : Math.sign(yawRate) || 1, speed);
       this.driftF = Math.min(1, this.driftF + dt * 7);
+      // Antippen der Handbremse dreht das Heck sofort raus (Impuls in Lenkrichtung)
+      if (hbEdge && Math.abs(this.steerIn) > 0.2) {
+        const k = Math.min(1.3, absV * 0.045) * Math.sign(this.steerIn);
+        b.applyTorqueImpulse(_imp.copy(_up).multiplyScalar(Iyy * k), true);
+      }
+    } else if (this.powerT > 0.35 && this.driftF < 0.05) {
+      this.startDrift(Math.sign(this.steerIn), speed);
+      this.driftF = 0.35;
+      b.applyTorqueImpulse(_imp.copy(_up).multiplyScalar(Iyy * 0.5 * Math.sign(this.steerIn)), true);
     } else {
-      const canHold = P.drive !== 'FWD' && drive > 0.55 && slipDeg > 10 && vLong > 6;
-      const target = canHold ? 0.75 : 0;
-      const rate = canHold ? 2 : slipDeg < 7 ? 8 : 4.5;
+      // Drift hält, solange Gas anliegt und das Auto schräg steht; Gas weg / Gegenlenken → greift wieder
+      const sIn = this.steerIn * this.driftDir;
+      // nur einen laufenden Drift halten – nie aus dem Nichts einen starten
+      const holding = this.driftF > 0.02 && P.drive !== 'FWD' && drive > 0.3 && slipDeg > 5 && vLong > 5 && !(sIn < -0.5 && slipDeg < 9);
+      const target = holding ? 1 : 0;
+      const rate = holding ? 3 : slipDeg < 6 ? 7 : drive < 0.1 ? 3.2 : 3.5;
       this.driftF += (target - this.driftF) * Math.min(1, dt * rate);
       if (this.driftF < 0.01) this.driftF = 0;
     }
+    // Schwung-Wechsel: kippt das Auto in die andere Richtung, wechselt die Drift-Seite mit
+    this.flipT = Math.max(0, (this.flipT || 0) - dt);
+    if (this.flipT <= 0 && this.driftF > 0.1 && Math.sign(bodySlip) !== this.driftDir && slipDeg > 12) this.driftDir = Math.sign(bodySlip);
     const dF = this.driftF;
     this.drifting = dF > 0.15;
 
@@ -379,7 +422,7 @@ export class Car {
       if (driven && Math.abs(Fx) > tcs) { spinT = clamp(Math.abs(Fx) / tcs - 1, 0, 1); Fx = Math.sign(Fx) * tcs; }
       const bf = brake * m * g.gravity * 0.85 * (w.front ? 0.3 : 0.2);
       if (bf > 0) Fx -= Math.sign(wl) * Math.min(bf, (Math.abs(wl) * mq) / dt * 0.5);
-      if (!w.front && handbrake > 0.05) Fx -= Math.sign(wl) * Math.min(maxF * 0.6 * handbrake, (Math.abs(wl) * mq) / dt * 0.5);
+      if (!w.front && handbrake > 0.05) Fx -= Math.sign(wl) * Math.min(maxF * (absV > 8 ? 0.3 : 0.6) * handbrake, (Math.abs(wl) * mq) / dt * 0.5);
       if (driven && drive < 0.05) {
         const eb = (0.06 * E.torque * ratioAbs) / W.r * x * driveW[w.front ? 0 : 1];
         Fx -= Math.sign(wl) * Math.min(eb, (Math.abs(wl) * mq) / dt * 0.3);
@@ -414,28 +457,54 @@ export class Car {
     }
 
     if (grounded >= 3 && absV > 1.2) {
-      // ---- Gierraten-Regler (Arcade-ESP): das Auto dreht genau so, wie gelenkt wird
+      // ---- Gierraten-Regler (Arcade-ESP): beim Grip-Fahren dreht das Auto genau so, wie gelenkt wird
       const rMax = aMax / Math.max(absV, 3);
-      let rDes = (vLong * Math.tan(this.steer)) / L;
-      if (dF > 0.1) rDes = lerp(clamp(rDes, -rMax, rMax), (vLong * Math.tan(this.steer)) / L * 1.6, dF);
-      rDes = clamp(rDes, -rMax * (1 + dF * 1.4), rMax * (1 + dF * 1.4));
-      const kYaw = lerp(6.5, 13, clamp(absV / 30, 0, 1)) * lerp(1, 0.35, dF) * oil;
+      const rGrip = clamp((vLong * Math.tan(this.steer)) / L, -rMax, rMax);
+      const kGrip = lerp(6.5, 13, clamp(absV / 30, 0, 1)) * oil;
+      let rDes = rGrip, kYaw = kGrip;
+      const inDrift = dF > 0.05 && vLong > 3;
+      if (inDrift) {
+        // ---- Drift-Regler: Lenkung + Gas bestimmen den Driftwinkel, nicht die Drehrate.
+        // In die Kurve lenken = mehr Winkel, gegenlenken = weniger, bis das Auto wieder greift.
+        const dir = this.driftDir;
+        const sIn = this.steerIn * dir;
+        const bDes = clamp(0.4 + 0.24 * (drive - 0.5) + 0.36 * Math.max(sIn, 0) + 0.62 * Math.min(sIn, 0), 0, 0.88);
+        const bNow = bodySlip * dir;
+        this.driftTarget = bDes;
+        const rDrift = this.pathRate + dir * 3.6 * (bDes - bNow);
+        rDes = lerp(rGrip, rDrift, dF);
+        kYaw = lerp(kGrip, 9 * oil, dF);
+      }
       b.applyTorqueImpulse(_imp.copy(_up).multiplyScalar(Iyy * kYaw * (rDes - yawRate) * dt), true);
       // Seitliches Rutschen dämpfen, solange nicht gedriftet wird
-      const kSlip = 2.2 * (1 - dF) * (this.onGrass ? 0.5 : 1) * oil;
+      const kSlip = 2.4 * (1 - dF) * (this.onGrass ? 0.5 : 1) * oil;
       if (kSlip > 0) {
         const Fl = clamp(-vLat * m * kSlip, -m * aMax * 0.5, m * aMax * 0.5);
         b.applyImpulse(_imp.copy(_right).multiplyScalar(Fl * dt), true);
       }
-      // Drift-Begrenzer: ab ~50° wird das Auto zurückgedreht -> kein Wegdrehen
-      const excess = Math.abs(bodySlip) - 0.85;
+      // Sicherheitsnetz: über ~63° wird zurückgedreht -> kein Abflug in den Dreher
+      const excess = Math.abs(bodySlip) - 1.1;
       if (excess > 0 && vLong > 0) {
         b.applyTorqueImpulse(_imp.copy(_up).multiplyScalar(-Math.sign(bodySlip) * Iyy * 14 * Math.min(excess, 0.8) * dt), true);
       }
-      // Drift-Schub: hält das Tempo im kontrollierten Drift
-      if (dF > 0.2 && drive > 0.3 && vLong > 5) {
-        _a.set(lin.x, 0, lin.z).normalize();
-        b.applyImpulse(_imp.copy(_a).multiplyScalar(m * 5.2 * dF * drive * dt), true);
+      if (inDrift && vH > 3) {
+        // Bahn: die Fahrtrichtung dreht zur Nase hin -> das Auto zieht im Bogen um die Kurve
+        _a.set(lin.x, 0, lin.z).multiplyScalar(1 / vH);              // Fahrtrichtung
+        _b.set(_fwd.x, 0, _fwd.z);
+        _c.copy(_b).addScaledVector(_a, -_b.dot(_a));                // zur Nase hin, quer zur Fahrt
+        const sn = _c.length();
+        if (sn > 0.02) {
+          _c.multiplyScalar(1 / sn);
+          const aPath = Math.min(aMax * 0.38, 0.8 * sn * vH) * dF;
+          b.applyImpulse(_imp.copy(_c).multiplyScalar(m * aPath * dt), true);
+        }
+        // Schwung halten: mit Gas bleibt das Drift-Tempo fast erhalten
+        if (drive > 0.2) {
+          const vT = this.driftV0 * (0.9 + 0.12 * drive);
+          const push = (vH < vT ? 2.5 + clamp((vT - vH) * 1.6, 0, 10) : 0) * drive * dF;
+          b.applyImpulse(_imp.copy(_a).multiplyScalar(m * push * dt), true);
+          this.driftV0 = Math.max(this.driftV0 - dt * 1.2, Math.min(this.driftV0, vH + 4));
+        }
       }
     }
 
@@ -446,10 +515,35 @@ export class Car {
       if (grounded >= 2) { _a.copy(_fwd).setY(0).normalize(); b.applyImpulse(_imp.copy(_a).multiplyScalar(m * 10.5 * dt), true); }
       this.flame = Math.max(this.flame, 0.75 + Math.random() * 0.25);
     }
+    // ---- Mini-Turbo: langer, sauberer Drift lädt auf – beim Rausgehen gibt's Schub
+    if (this.drifting && vH > 9 && grounded >= 3 && !this.onGrass) this.driftCharge += dt;
+    const lvl = this.driftCharge > 3.4 ? 3 : this.driftCharge > 2.1 ? 2 : this.driftCharge > 1.0 ? 1 : 0;
+    if (lvl > this.driftLevel && this.active) this.events.push({ type: 'driftlevel', level: lvl });
+    this.driftLevel = lvl;
+    if (!this.drifting && this.wasDrifting) {
+      if (lvl > 0 && this.time - this.lastImpact > 0.8) { this.miniTurbo = [0, 0.5, 0.8, 1.1][lvl]; this.events.push({ type: 'miniturbo', level: lvl }); }
+      this.driftCharge = 0; this.driftLevel = 0;
+    }
+    this.wasDrifting = this.drifting;
+    if (this.miniTurbo > 0) {
+      this.miniTurbo = Math.max(0, this.miniTurbo - dt);
+      if (grounded >= 2) { _a.copy(_fwd).setY(0).normalize(); b.applyImpulse(_imp.copy(_a).multiplyScalar(m * 6 * dt), true); }
+      this.flame = Math.max(this.flame, 0.55 + Math.random() * 0.25);
+    }
+    // Funken an den Hinterrädern zeigen die Ladestufe
+    if (this.driftLevel > 0 && this.drifting) {
+      this.sparkAcc = (this.sparkAcc || 0) + dt * 36;
+      const col = [0, 0x5fb8ff, 0xffa02a, 0xd46bff][this.driftLevel];
+      while (this.sparkAcc > 1) {
+        this.sparkAcc -= 1;
+        const w = this.wheels[2 + ((Math.random() * 2) | 0)];
+        if (w && w.grounded && !w.lost) this.g.fx.sparks.burst(w.contact, 1 + this.driftLevel, { speed: 3 + this.driftLevel, spread: 0.8, life: 0.28, color: col, up: 1.5 });
+      }
+    }
 
     // ---- Abtrieb + Luftwiderstand
     const v2 = speed * speed;
-    if (grounded > 0) b.applyImpulse(_imp.copy(_up).multiplyScalar(-1.0 * v2 * (m / 1400) * dt), true);
+    if (grounded > 0) b.applyImpulse(_imp.copy(_up).multiplyScalar(-1.8 * v2 * (m / 1400) * dt), true);
     b.applyImpulse(_imp.set(lin.x, lin.y, lin.z).multiplyScalar(-0.5 * speed * dt * (this.nitro > 0 ? 0.55 : 1)), true);
 
     // ---- In der Luft: sanft aufrichten
@@ -525,6 +619,7 @@ export class Car {
     const s = clamp((impactSpeed - 2.4) / 13, 0, 2.0) / P.durability;
     if (s < 0.01) return 0;
     this.lastImpact = this.time;
+    if (impactSpeed > 5) { this.driftCharge = 0; this.driftLevel = 0; }
     this.lastHit = { speed: impactSpeed * 3.6, s };
     this.root.updateMatrixWorld(true);
     if (this.onImpact) this.onImpact(p, dirInto, impactSpeed);

@@ -79,3 +79,22 @@ Freunde im selben WLAN öffnen `http://<IP-deines-PCs>:8080`. Unter Windows einm
 
 Hinweise: Räume liegen im Arbeitsspeicher – ein Neustart/Redeploy beendet laufende Räume. Nur **eine** Instanz betreiben (kein Skalieren auf mehrere Container).
 Läuft die Seite woanders als der Server, kann unter Einstellungen → „Spielserver“ eine Adresse eingetragen werden (z. B. `nitro.deine-domain.de`).
+
+## Neu in v7: Fahrgefühl, Drift, Sound, Effekte
+- **Grip:** maximale Querbeschleunigung +17 %, mehr Abtrieb bei Tempo. Bots nutzen den Grip mit (`aLat` in `src/bot.js`).
+- **Drift-Regler** (`src/car.js`): Im Drift bestimmen Lenkung und Gas den *Driftwinkel* (nicht die Drehrate).
+  - Steuerung: Handbremse antippen = Heck raus, Gas = halten, in die Kurve lenken = mehr Winkel, gegenlenken / Gas weg = greifen.
+  - Schwung-Wechsel per Handbremsen-Flick, Power-Slide bei RWD am Grip-Limit.
+  - Mini-Turbo nach langem Drift (Funken blau/orange/lila).
+  - Test: `node test-drift.mjs`.
+- **Kamera:** Tempo-Zoom auf max. 76° begrenzt (vorher bis ~89°), weniger Zurückweichen beim Beschleunigen.
+- **Tacho:** nur noch die zwei Rundinstrumente, Beschriftung alle 40 km/h (keine Überlappung).
+- **Sound:**
+  - Motor-Loops neu gebaut mit WSOLA (`tools/loops2.py`). Statt 0,12–0,3 s harter Wiederholung laufen jetzt ~1,5 s lange, phasengenau zusammengesetzte Loops: kein Schnarren und keine Knackser mehr.
+  - `tools/levels.py` gleicht Lautheit und Schärfe aller Motoren an (der Turbo war +5 dB lauter). Werte stehen im Manifest (`gain`, `shelf`, `liftGain`).
+  - Gas-weg-Effekt mit Abklingzeit und über die Motor-Filter; Schaltunterbrechung beim Hochschalten.
+  - Reifenquietschen aus Rauschbändern statt Pfeiftönen; weichere UI-Töne; sanfte Höhenabsenkung im Master.
+- **Effekte** (`src/itemfx.js`):
+  - Öl spritzt aus dem Heck, die Lache breitet sich mit Regenbogenfilm aus.
+  - Schockwelle mit Bodenwelle, Druckkuppel, Staubwalze und Rissen.
+  - Explosionen mit Feuerball-Blitz und Brandfleck.

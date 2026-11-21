@@ -54,7 +54,8 @@ function scale(ctx, cx, cy, r, o) {
     ctx.lineWidth = maj ? 2.8 : mid ? 1.7 : 1.0;
     ctx.strokeStyle = o.red != null && v > o.red + 1e-6 ? '#ff5a48' : '#f3f3f1';
     ctx.stroke();
-    if (maj) {
+    const lab = maj && Math.abs(v / (o.labelEvery || o.major) - Math.round(v / (o.labelEvery || o.major))) < 1e-6;
+    if (lab) {
       ctx.fillStyle = '#f6f6f4';
       ctx.font = `500 ${Math.round(r * o.fs)}px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       const rr = r * (o.numR || 0.655);
@@ -171,7 +172,7 @@ export class Cluster {
     for (const cx of [this.lx, this.rx]) {
       tube(ctx, cx, cy, R * 1.06);
     }
-    scale(ctx, this.lx, cy, R, { max: 280, major: 20, minor: 5, mid: 10, fs: 0.15, label: (v) => String(v), unit: 'km/h' });
+    scale(ctx, this.lx, cy, R, { max: 280, major: 20, labelEvery: 40, minor: 5, mid: 10, fs: 0.15, numR: 0.64, label: (v) => String(v), unit: 'km/h' });
     scale(ctx, this.rx, cy, R, { max: maxK, major: 1, minor: maxK > 8 ? 0.25 : 0.2, mid: 0.5, fs: 0.2, numR: 0.64, red, label: (v) => String(Math.round(v)), unit: '1/min x 1000' });
     const sr = R * 0.24;
     subScale(ctx, this.lx, cy + R * 0.47, sr, ['0', '½', '1'], 'fuel', true);

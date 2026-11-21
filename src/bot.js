@@ -106,7 +106,7 @@ export class BotDriver {
     this.lastSteer = steer;
 
     // ---- Zieltempo aus Kurven voraus inkl. Bremsweg
-    const aLat = 17 * S.lat * (car.onGrass ? 0.7 : 1) * (car.oilT > 0 ? 0.4 : 1);
+    const aLat = 19 * S.lat * (car.onGrass ? 0.7 : 1) * (car.oilT > 0 ? 0.4 : 1);
     const reach = Math.min(N / 2, Math.round((v * v) / (2 * S.brake) / 0.8 + 30));
     let vT = 90;
     for (let k = 8; k < reach; k += 5) {
