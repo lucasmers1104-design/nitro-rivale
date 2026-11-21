@@ -6,10 +6,13 @@ import * as THREE from 'three';
 const _v = new THREE.Vector3();
 
 export class Race {
-  constructor(track, { laps = 3, mode = 'race' } = {}) {
+  constructor(track, { laps = 3, mode = 'race', variant = 'race' } = {}) {
     this.track = track;
-    this.laps = laps;
+    this.variant = variant; // 'race' | 'elim' (Letzter fliegt je Runde raus) | 'derby' (Last Man Standing)
+    this.laps = variant === 'race' ? laps : 999;
     this.mode = mode; // 'race' | 'free'
+    this.outCount = 0;
+    this.leaderLap = 0;
     this.entries = [];
     this.phase = 'grid'; // grid -> countdown -> running -> done
     this.cd = 0;
@@ -36,6 +39,27 @@ export class Race {
   }
 
   get player() { return this.entries.find((e) => e.isPlayer); }
+  alive() { return this.entries.filter((e) => !e.out); }
+  // Auto scheidet aus (Derby: Totalschaden, Ausscheiden: Letzter nach der Runde des Führenden)
+  eliminate(e, place = null) {
+    if (!e || e.out || e.finished) return false;
+    e.out = true;
+    e.outPlace = place ?? this.entries.length - this.outCount;
+    e.outTime = this.time;
+    this.outCount++;
+    this.events.push({ type: 'out', e });
+    return true;
+  }
+  // Letzter Überlebender gewinnt
+  crown(e, place = 1) {
+    if (!e || e.finished) return;
+    e.finished = true;
+    e.finishTime = this.time;
+    e.finishPlace = place;
+    this.finishOrder++;
+    this.events.push({ type: 'finish', e, winner: true });
+    if (e.isPlayer) this.playerDoneAt = this.time;
+  }
   entryOf(car) { return this.entries.find((e) => e.car === car); }
   progressM(e) { return e.total * 0.8; }
 
@@ -66,7 +90,7 @@ export class Race {
     if (this.phase !== 'running' && this.phase !== 'done') return;
     this.time += dt;
 
-    for (const e of this.entries) {
+    for (const e of this.variant === 'derby' ? [] : this.entries) {
       const p = e.car.body.translation();
       const n = tr.nearest(p.x, p.z, 2);
       if (n.i < 0 || n.d > 70) continue;
@@ -84,7 +108,7 @@ export class Race {
       const face = _v.x * tr.tan[n.i].x + _v.z * tr.tan[n.i].z;
       e.wrongT = along < -3 || (face < -0.5 && Math.hypot(lv.x, lv.z) < 3 && e.car.input.throttle > 0.5) ? e.wrongT + dt : Math.max(0, e.wrongT - dt * 2);
       e.wrong = e.wrongT > 1.2;
-      if (e.finished) continue;
+      if (e.finished || e.out) continue;
       const lapsDone = Math.floor(e.total / N);
       if (lapsDone > e.lap) {
         e.lap = lapsDone;
@@ -95,6 +119,7 @@ export class Race {
           if (best) e.bestLap = lt;
           e.lapStart = this.time;
           this.events.push({ type: 'lap', e, time: lt, best, lap: lapsDone });
+          if (lapsDone > this.leaderLap) { this.leaderLap = lapsDone; this.events.push({ type: 'leaderLap', e, lap: lapsDone }); }
         }
         if (this.mode === 'race' && lapsDone >= this.laps && e.remote) { /* Zielmeldung kommt vom Besitzer */ }
         else if (this.mode === 'race' && lapsDone >= this.laps) {
@@ -107,16 +132,24 @@ export class Race {
       }
     }
     // Platzierung
+    const hp = (c) => c.derbyHp ?? 100;
     const sorted = [...this.entries].sort((a, b) => {
+      if (!!a.out !== !!b.out) return a.out ? 1 : -1;
+      if (a.out && b.out) return a.outPlace - b.outPlace;
       if (a.finished && b.finished) return a.finishPlace - b.finishPlace;
       if (a.finished) return -1;
       if (b.finished) return 1;
+      if (this.variant === 'derby') return hp(b.car) - hp(a.car);
       return b.total - a.total;
     });
     sorted.forEach((e, k) => { e.place = k + 1; });
     this.sorted = sorted;
     // Ende: alle im Ziel oder 30 s nach dem Spieler
-    if (this.mode === 'race' && this.phase === 'running' && !this.net) {
+    if (this.variant !== 'race' && this.phase === 'running' && !this.net) {
+      const al = this.alive();
+      if (al.length <= 1 && !this.endAt) { if (al[0]) this.crown(al[0]); this.endAt = this.time + 3; }
+      if (this.endAt && this.time >= this.endAt) { this.phase = 'done'; this.events.push({ type: 'done' }); }
+    } else if (this.mode === 'race' && this.phase === 'running' && !this.net) {
       const all = this.entries.every((e) => e.finished);
       if (all || (this.playerDoneAt != null && this.time - this.playerDoneAt > 30)) {
         this.phase = 'done';
@@ -147,11 +180,13 @@ export class Race {
     const N = this.track.N;
     return (this.sorted || this.entries).map((e) => {
       let time = e.finishTime, est = false;
+      if (e.out) return { name: e.name, isPlayer: e.isPlayer, color: e.color, car: e.car.p.name, place: e.place, time: e.outTime, est: false, best: e.bestLap, out: true };
+      if (time == null && this.variant !== 'race') time = this.time;
       if (time == null) {
         const done = Math.max(0.05, e.total / (N * this.laps));
         time = this.time / done; est = true;
       }
-      return { name: e.name, isPlayer: e.isPlayer, color: e.color, car: e.car.p.name, place: e.place, time, est, best: e.bestLap };
+      return { name: e.name, isPlayer: e.isPlayer, color: e.color, car: e.car.p.name, place: e.place, time, est, best: e.bestLap, fin: e.finished };
     });
   }
 

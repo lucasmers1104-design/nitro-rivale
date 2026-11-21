@@ -82,3 +82,14 @@ for (const id of ['brutus', 'kaze', 'rhino']) {
   run(g, c, 2.5, () => { c.input = { throttle: 1, brake: 0, steer: Math.abs(beta(c)) > 4 ? -0.7 * c.driftDir : 0, handbrake: 0 }; for (const e of c.events) if (e.type === 'miniturbo') evs.push(e.level); c.events.length = 0; vmax = Math.max(vmax, kmh(c)); });
   console.log(`${id}: Mini-Turbo Stufe ${lv} → ausgelöst ${JSON.stringify(evs)} | Tempo nach dem Drift ${f(v0)} → max ${f(vmax)} km/h`);
 }
+// Langes Lenken ohne Handbremse darf nie einen Drift auslösen
+for (const id of ['brutus', 'kaze', 'rhino']) {
+  const res = [];
+  for (const v of [80, 120, 160]) {
+    const [g, c] = fresh(id, v);
+    let mb = 0, dr = false;
+    run(g, c, 4, () => { c.input = { throttle: 1, brake: 0, steer: 1, handbrake: 0 }; mb = Math.max(mb, Math.abs(beta(c))); if (c.drifting) dr = true; });
+    res.push(`${v} km/h: max ${f(mb)}°${dr ? ' DRIFT!' : ''}`);
+  }
+  console.log(`${id} – 4 s voll lenken + Vollgas: ${res.join(' | ')}`);
+}

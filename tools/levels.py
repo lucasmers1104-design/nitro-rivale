@@ -17,7 +17,7 @@ for vid, M in m.items():
     h = np.mean([harsh(s) for s in ons])
     gain = TARGET_RMS / rms
     # Hochton-Absenkung so, dass die "Schärfe" in etwa beim Ziel landet (Shelf ab 2,8 kHz)
-    shelf = float(np.clip(10 * np.log10(TARGET_HARSH / max(h, 1e-4)), -9, 1.5))
+    shelf = float(np.clip(10 * np.log10(TARGET_HARSH / max(h, 1e-4)), -9, 0))  # nie heller machen
     s, dd = M['regions']['lift']; lift = y[int(s * SR):int((s + dd) * SR)]
     lpk = np.sqrt(np.max(np.convolve(lift ** 2, np.ones(2205) / 2205, 'valid')))
     lift_gain = (rms * 10 ** (-8 / 20)) / lpk      # Gas-weg-Effekt 8 dB unter dem Motor

@@ -3,6 +3,23 @@
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 
+// Hupen: Töne [Frequenz, Anteil], Trichter-Formant, Anblasen, Ausklingen
+export const HORNS = {
+  classic: { label: 'Klassik (Zweiklang)', tones: [[392, 0.55], [494, 0.45]], formant: 2100, hp: 260, lp: 4200, drive: 2.2, attack: 0.025, release: 0.07, bend: 0.03, level: 1 },
+  high: { label: 'Hoch (Japan-Hupe)', tones: [[523, 0.5], [659, 0.5]], formant: 2600, hp: 380, lp: 5200, drive: 2.0, attack: 0.02, release: 0.06, bend: 0.02, level: 0.85 },
+  sport: { label: 'Sport (Fanfare)', tones: [[440, 0.45], [554, 0.35], [659, 0.2]], formant: 2300, hp: 300, lp: 4600, drive: 2.4, attack: 0.03, release: 0.08, bend: 0.025, level: 0.95 },
+  truck: { label: 'Lkw-Druckluft', tones: [[185, 0.4], [233, 0.35], [277, 0.3]], formant: 1150, hp: 120, lp: 3000, drive: 3.0, attack: 0.09, release: 0.35, bend: 0.06, level: 1.15, air: 0.05 },
+  train: { label: 'Zug-Signal', tones: [[311, 0.35], [370, 0.3], [466, 0.3], [554, 0.2]], formant: 1500, hp: 180, lp: 3400, drive: 2.6, attack: 0.12, release: 0.45, bend: 0.04, level: 1.05, air: 0.03 },
+  cucaracha: { label: 'La Cucaracha', melody: [[392, 0.13], [392, 0.13], [392, 0.13], [523, 0.26], [659, 0.3], [0.001, 0.06], [392, 0.13], [392, 0.13], [392, 0.13], [523, 0.26], [659, 0.4]], formant: 2200, hp: 260, lp: 4400, drive: 2.2 },
+};
+let _hornCurve = null;
+function hornCurve() {
+  if (_hornCurve) return _hornCurve;
+  const n = 1024; _hornCurve = new Float32Array(n);
+  for (let i = 0; i < n; i++) { const x = (i / (n - 1)) * 2 - 1; _hornCurve[i] = Math.tanh(x * 2.2) / Math.tanh(2.2); }
+  return _hornCurve;
+}
+
 export class GameAudio {
   constructor() {
     const AC = window.AudioContext || window.webkitAudioContext;
@@ -389,6 +406,71 @@ export class GameAudio {
   rivalsClear() { this.rivalUpdate([], 0); }
   setVolume(v) { this.vol = v; if (!this.muted) this.master.gain.setTargetAtTime(0.85 * v, this.ctx.currentTime, 0.05); }
   // Rennen + Power-ups (synthetisch)
+  // ---------------------------------------------------------------- Hupe
+  // Echte Hupen sind Membran-Hörner: zwei (oder drei) Töne mit harten Obertönen,
+  // durch einen Trichter gefiltert. Hier: Sägezahn → Sättigung → Trichter-Formant → Tiefpass.
+  hornStart(id, kind = 'classic', vol = 1) {
+    if (this.horns?.get(id)) return;
+    this.horns = this.horns || new Map();
+    const c = this.ctx, t = c.currentTime;
+    const H = HORNS[kind] || HORNS.classic;
+    const out = c.createGain(); out.gain.value = 0;
+    const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = H.lp; lp.Q.value = 0.7;
+    const form = c.createBiquadFilter(); form.type = 'peaking'; form.frequency.value = H.formant; form.Q.value = 1.1; form.gain.value = 9;
+    const body = c.createBiquadFilter(); body.type = 'highpass'; body.frequency.value = H.hp; body.Q.value = 0.6;
+    const sh = c.createWaveShaper(); sh.curve = hornCurve(); sh.oversample = '2x';
+    const pre = c.createGain(); pre.gain.value = H.drive;
+    pre.connect(sh).connect(body).connect(form).connect(lp).connect(out).connect(this.master);
+    const oscs = [];
+    if (H.melody) {
+      // Melodie-Hupe: spielt einmal die Tonfolge
+      let tt = t + 0.02;
+      const o = c.createOscillator(); o.type = 'sawtooth';
+      const o2 = c.createOscillator(); o2.type = 'sawtooth'; o2.detune.value = 8;
+      for (const [f, d] of H.melody) { o.frequency.setValueAtTime(f, tt); o2.frequency.setValueAtTime(f * 1.003, tt); tt += d; }
+      const g = c.createGain(); g.gain.value = 0.5;
+      o.connect(g); o2.connect(g); g.connect(pre);
+      o.start(t); o2.start(t); o.stop(tt + 0.1); o2.stop(tt + 0.1);
+      oscs.push(o, o2);
+      out.gain.setValueAtTime(0, t); out.gain.linearRampToValueAtTime(0.2 * vol, t + 0.03);
+      out.gain.setValueAtTime(0.2 * vol, tt - 0.05); out.gain.linearRampToValueAtTime(0, tt + 0.05);
+      this.horns.set(id, { oscs, out, melody: true, end: tt });
+      setTimeout(() => { if (this.horns.get(id)?.out === out) this.horns.delete(id); }, (tt - t + 0.2) * 1000);
+      return;
+    }
+    for (const [f, g0] of H.tones) {
+      const o = c.createOscillator(); o.type = 'sawtooth';
+      // kurzer "Anblas"-Schlenker beim Einsetzen, dann leichtes Schwanken
+      o.frequency.setValueAtTime(f * (1 - H.bend), t);
+      o.frequency.exponentialRampToValueAtTime(f, t + H.attack + 0.04);
+      const lfo = c.createOscillator(); lfo.frequency.value = 5 + Math.random() * 2;
+      const lg = c.createGain(); lg.gain.value = f * 0.003; lfo.connect(lg).connect(o.frequency); lfo.start(t);
+      const g = c.createGain(); g.gain.value = g0;
+      o.connect(g).connect(pre); o.start(t);
+      oscs.push(o, lfo);
+    }
+    if (H.air) {   // Druckluft-Rauschen bei Lkw-Hörnern
+      const n = this.loop(this.noise); const nf = c.createBiquadFilter(); nf.type = 'bandpass'; nf.frequency.value = 2400; nf.Q.value = 0.8;
+      const ng = c.createGain(); ng.gain.value = H.air; n.connect(nf).connect(ng).connect(out); oscs.push(n);
+    }
+    out.gain.setValueAtTime(0, t);
+    out.gain.linearRampToValueAtTime(0.17 * vol * H.level, t + H.attack);
+    this.horns.set(id, { oscs, out, release: H.release });
+  }
+  hornStop(id) {
+    const h = this.horns?.get(id);
+    if (!h || h.melody) return;
+    const t = this.ctx.currentTime;
+    h.out.gain.cancelScheduledValues(t);
+    h.out.gain.setValueAtTime(h.out.gain.value, t);
+    h.out.gain.linearRampToValueAtTime(0, t + h.release);
+    for (const o of h.oscs) { try { o.stop(t + h.release + 0.05); } catch { /* schon gestoppt */ } }
+    this.horns.delete(id);
+  }
+  hornVolume(id, vol) {
+    const h = this.horns?.get(id);
+    if (h && !h.melody) h.out.gain.setTargetAtTime(0.17 * vol, this.ctx.currentTime, 0.05);
+  }
   sfx(name, k = 1) {
     const t = (o) => this.tone(o), b = (o) => this.burst(o);
     switch (name) {
@@ -413,6 +495,15 @@ export class GameAudio {
       case 'shock': t({ freq: 140, to: 40, dur: 0.6, gain: 0.7, type: 'sine' }); b({ dur: 0.6, freq: 300, sweepTo: 5000, type: 'bandpass', q: 0.7, gain: 0.35 }); break;
       case 'armor': [392, 523, 659, 784].forEach((f, i) => t({ freq: f, dur: 0.25, gain: 0.09, type: 'triangle', delay: i * 0.06 })); t({ freq: 1500, dur: 0.6, gain: 0.05, type: 'sine', delay: 0.25 }); break;
       case 'repair': for (let i = 0; i < 6; i++) b({ dur: 0.03, freq: 3500, type: 'bandpass', q: 4, gain: 0.18, delay: i * 0.07 }); [523, 659, 784, 1046].forEach((f, i) => t({ freq: f, dur: 0.18, gain: 0.08, type: 'triangle', delay: 0.45 + i * 0.07 })); break;
+      case 'smoke': b({ dur: 2.2, freq: 900, sweepTo: 500, type: 'bandpass', q: 0.6, gain: 0.32 }); b({ dur: 0.4, freq: 300, type: 'lowpass', gain: 0.3 }); break;
+      case 'clank': t({ freq: 180, to: 90, dur: 0.16, gain: 0.25, type: 'triangle' }); b({ dur: 0.08, freq: 2600, type: 'bandpass', q: 3, gain: 0.25 }); t({ freq: 1240, dur: 0.22, gain: 0.05, type: 'sine', delay: 0.02 }); t({ freq: 1870, dur: 0.18, gain: 0.03, type: 'sine', delay: 0.02 }); break;
+      case 'ram': t({ freq: 98, to: 196, dur: 0.35, gain: 0.25, type: 'triangle' }); [440, 554, 659].forEach((f, i) => t({ freq: f, dur: 0.18, gain: 0.07, type: 'triangle', delay: 0.12 + i * 0.05 })); b({ dur: 0.3, freq: 1800, type: 'bandpass', q: 2, gain: 0.15 }); break;
+      case 'ramhit': t({ freq: 70, to: 30, dur: 0.6, gain: 0.7, type: 'sine' }); b({ dur: 0.35, freq: 3200, sweepTo: 600, type: 'bandpass', q: 1.5, gain: 0.45 }); [1180, 1630, 2210].forEach((f) => t({ freq: f, dur: 0.6, gain: 0.04, type: 'sine', delay: 0.02 })); break;
+      case 'magnet': t({ freq: 110, to: 220, dur: 1.4, gain: 0.16, type: 'sawtooth' }); t({ freq: 112, to: 224, dur: 1.4, gain: 0.12, type: 'sawtooth' }); b({ dur: 1.2, freq: 2000, type: 'bandpass', q: 6, gain: 0.08 }); break;
+      case 'emp': t({ freq: 60, to: 30, dur: 0.9, gain: 0.5, type: 'sine' }); b({ dur: 0.7, freq: 4000, sweepTo: 800, type: 'bandpass', q: 1.2, gain: 0.35 }); for (let i = 0; i < 8; i++) b({ dur: 0.03, freq: 5000 + Math.random() * 3000, type: 'bandpass', q: 3, gain: 0.15, delay: Math.random() * 0.5 }); break;
+      case 'powerdown': t({ freq: 420, to: 60, dur: 0.9, gain: 0.16, type: 'triangle' }); for (let i = 0; i < 5; i++) b({ dur: 0.04, freq: 4500, type: 'bandpass', q: 3, gain: 0.12, delay: 0.1 + Math.random() * 0.6 }); break;
+      case 'ghost': [523, 659, 784, 1046].forEach((f, i) => t({ freq: f, to: f * 0.5, dur: 1.2, gain: 0.05, type: 'sine', delay: i * 0.04 })); b({ dur: 1.0, freq: 1200, sweepTo: 300, type: 'bandpass', q: 0.8, gain: 0.18 }); break;
+      case 'puncture': b({ dur: 0.08, freq: 1500, gain: 0.5 }); b({ dur: 1.3, freq: 4000, sweepTo: 2500, type: 'highpass', gain: 0.18, delay: 0.05 }); t({ freq: 90, to: 50, dur: 0.3, gain: 0.3, type: 'sine' }); break;
       case 'miniturbo': b({ dur: 0.55 + k * 0.12, freq: 500, sweepTo: 2400, type: 'bandpass', q: 0.9, gain: 0.22 + k * 0.06 }); b({ dur: 0.3, freq: 180, type: 'lowpass', gain: 0.3 }); break;
       case 'charge': t({ freq: [0, 660, 880, 1175][k] || 880, dur: 0.12, gain: 0.06, type: 'triangle' }); break;
       case 'lap': [784, 988].forEach((f, i) => t({ freq: f, dur: 0.16, gain: 0.1, type: 'triangle', delay: i * 0.12 })); break;
@@ -448,7 +539,8 @@ export class LoopEngine {
     this.kind = 'loops';
     const c = this.ctx;
     this.out = c.createGain(); this.out.gain.value = 0;
-    this.gain = bank.gain ?? 1;          // Lautheit der Aufnahme angeglichen (sonst ist z. B. der Turbo viel lauter)
+    this.gain = (bank.gain ?? 1) * (preset.engine?.gainMul ?? 1);
+    this.pitch = preset.engine?.pitch ?? 1;   // z. B. Kaze tiefer, damit er oben nicht kreischt          // Lautheit der Aufnahme angeglichen (sonst ist z. B. der Turbo viel lauter)
     this.liftGain = bank.liftGain ?? 0.55;
     // Klang: etwas mehr Bass (Blubbern), harte Mitten zurück, Höhen je nach Aufnahme gezähmt
     const low = c.createBiquadFilter(); low.type = 'lowshelf'; low.frequency.value = 160; low.gain.value = 4.5;
@@ -511,7 +603,7 @@ export class LoopEngine {
     this.heldT = thr > 0.5 ? this.heldT + dt : 0;
     // Gas weg: Abblasen/Nachbrennen nur nach echtem Vollgas-Zug und nicht im Sekundentakt
     if (active && !this.quiet && this.prevThrottle > 0.5 && thr < 0.1 && x > 0.6 && this.heldTPrev > 0.45 && now - this.lastLift > 1.6) {
-      const d = this.oneShot('lift', this.liftGain * 0.9, 0.96 + Math.random() * 0.08, now, true);
+      const d = this.oneShot('lift', this.liftGain * 0.9, (0.96 + Math.random() * 0.08) * this.pitch, now, true);
       this.lastLift = now;
       this.duckOff = Math.max(this.duckOff, d * 0.5);
     }
@@ -539,6 +631,7 @@ export class LoopEngine {
       let rate = 1;
       if (v.kind === 'on' || v.kind === 'off') rate = Math.min(1.6, Math.max(0.5, x / v.x));
       else if (v.kind === 'idle') rate = Math.min(1.3, Math.max(0.9, x / v.x)); // nie Micky-Maus-Leerlauf
+      rate *= this.pitch;
       if (w > 0.001 || v.lastRate === undefined) { v.src.playbackRate.setTargetAtTime(rate, now, 0.02); v.lastRate = rate; }
     }
   }

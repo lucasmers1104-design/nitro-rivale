@@ -1,6 +1,14 @@
 import * as THREE from 'three';
 import { updateFlame } from './fx.js';
 import { buildCarModel } from './carmodel.js';
+import { buildRamBar } from './itemfx.js';
+
+// Kollisionsgruppen: Autos sind Gruppe 2. Ein "Geist" (Power-up) gehört zu Gruppe 3
+// und filtert Gruppe 2 aus – fährt also durch Autos, aber nicht durch Boden und Wände.
+export const CAR_GROUPS = (0x0002 << 16) | 0xffff;
+export const GHOST_GROUPS = (0x0004 << 16) | 0xfffd;
+// Boden-Abtastung normaler Autos: Geister (Gruppe 3) gelten nicht als Boden
+export const RAY_GROUPS = (0x0002 << 16) | 0xfffb;
 
 // ---------------------------------------------------------------------------
 // Hilfsfunktionen
@@ -129,9 +137,11 @@ export class Car {
     this.remote = remote; // Auto eines anderen Spielers: folgt nur den Netzdaten
     // Power-up-Zustände
     this.nitro = 0; this.oilT = 0; this.armorT = 0; this.hold = false; this.spinDir = 1;
+    // v8-Power-ups: Plattfuß, Rammbock, Magnet, EMP, Geist
+    this.flatT = 0; this.ramT = 0; this.magnetT = 0; this.magnetTarget = null; this.empT = 0; this.ghostT = 0; this.ghostOn = false;
     this.name = name;
     this.color = color;
-    Object.assign(this, buildCarModel(preset, color, game.envMap));
+    Object.assign(this, buildCarModel(preset, color, game.envMap, preset.tune));
     game.scene.add(this.root);
 
     const R = game.RAPIER;
@@ -142,7 +152,7 @@ export class Car {
       (remote ? R.RigidBodyDesc.kinematicPositionBased() : R.RigidBodyDesc.dynamic()).setAngularDamping(0.6).setLinearDamping(0.01).setCcdEnabled(true).setCanSleep(!(isPlayer || ai))
     );
     const inertia = { x: (m / 12) * (H * H + l * l) * 1.1, y: (m / 12) * (w * w + l * l), z: (m / 12) * (w * w + H * H) * 2.0 };
-    this.comLocal = new THREE.Vector3(0, -h * 0.45, 0.05);
+    this.comLocal = new THREE.Vector3(0, preset.comY ?? -h * 0.45, preset.comZ ?? 0.05);
     const chassis = R.ColliderDesc.cuboid(w * 0.49, h / 2, l / 2 + 0.1)
       .setMassProperties(m, this.comLocal, inertia, { x: 0, y: 0, z: 0, w: 1 })
       .setFriction(0.35).setRestitution(0.05)
@@ -151,6 +161,7 @@ export class Car {
       .setTranslation(0, h / 2 + cabinH / 2, cabinZ).setDensity(0).setFriction(0.3)
       .setActiveEvents(R.ActiveEvents.CONTACT_FORCE_EVENTS).setContactForceEventThreshold(m * 1.2);
     this.colliders = [game.world.createCollider(chassis, this.body), game.world.createCollider(cabin, this.body)];
+    for (const c of this.colliders) c.setCollisionGroups(CAR_GROUPS);
     for (const c of this.colliders) game.owners.set(c.handle, { type: 'car', car: this });
 
     // Federung: statisch ~50 % eingefedert
@@ -167,7 +178,7 @@ export class Car {
     this.hbT = 9; this.flipped = false;
     this.driftCharge = 0; this.driftLevel = 0; this.wasDrifting = false; this.miniTurbo = 0;
     this.driftDir = 1; this.driftV0 = 0; this.driftTarget = 0; this.pathRate = 0; this.prevVH = null; this.hbPrev = false; this.powerT = 0;
-    this.flame = 0;
+    this.flame = 0; this.boostFlame = 0;
     this.gear = 1;
     this.rpm = preset.engine.idle;
     this.boost = 0;
@@ -175,6 +186,7 @@ export class Car {
     this.limiterT = 0;
     this.limiterCut = false;
     this.engineHp = 100;
+    this.derbyHp = 100; // Derby-Lebenspunkte (Last Man Standing)
     this.bodyHp = 100;
     this.speed = 0; this.vLong = 0; this.vLat = 0;
     this.grounded = 0;
@@ -197,6 +209,69 @@ export class Car {
     this.prevVLong = 0; this.accLong = 0;
   }
 
+  // Geist: Kollisionsgruppe umschalten + halbdurchsichtig, blau schimmernd
+  applyGhost() {
+    const on = this.ghostT > 0;
+    if (on === this.ghostOn) return;
+    this.ghostOn = on;
+    for (const c of this.colliders) c.setCollisionGroups(on ? GHOST_GROUPS : CAR_GROUPS);
+    this.root.traverse((o) => {
+      if (!o.isMesh || o.userData.noGhost) return;
+      if (on) {
+        o.userData.matReal = o.material;
+        const mk = (mt) => { const g = mt.clone(); g.transparent = true; g.opacity = 0.32; g.depthWrite = false; if (g.emissive) { g.emissive = new THREE.Color(0x3a8cff); g.emissiveIntensity = 0.6; } return g; };
+        o.material = Array.isArray(o.material) ? o.material.map(mk) : mk(o.material);
+      } else if (o.userData.matReal) {
+        const tmp = o.material; o.material = o.userData.matReal; o.userData.matReal = null;
+        (Array.isArray(tmp) ? tmp : [tmp]).forEach((mt) => mt.dispose());
+      }
+    });
+  }
+  // Optik der Power-ups (läuft für eigene und fremde Autos)
+  updatePowerFx(dt) {
+    // Rammbock: glühender Frontbügel
+    if (this.ramT > 0 && !this.ramBar) {
+      // vor die Frontstoßstange setzen (an ihrer echten Lage im Modell ausgerichtet)
+      const host = this.sway || this.root;
+      const bump = this.parts.find((x) => x.id === 'bumperF' && x.state !== 'gone');
+      let w = this.p.dims.w, z = -this.p.dims.l / 2 - 0.1, y = this.p.wheel.r * 0.35;
+      if (bump?.obj) {
+        host.updateMatrixWorld(true);
+        const box = new THREE.Box3().setFromObject(bump.obj).applyMatrix4(new THREE.Matrix4().copy(host.matrixWorld).invert());
+        w = Math.max(1.2, box.max.x - box.min.x); z = box.min.z - 0.1; y = box.min.y - 0.02;
+      }
+      this.ramBar = buildRamBar({ ...this.p.dims, w: w * 1.05 });
+      this.ramBar.position.set(0, y, z);
+      this.ramBar.traverse((o) => { o.userData.noGhost = true; });
+      host.add(this.ramBar);
+    } else if (this.ramT <= 0 && this.ramBar) {
+      this.ramBar.parent?.remove(this.ramBar);
+      this.ramBar.traverse((o) => { if (o.isMesh) { o.geometry.dispose(); } });
+      this.ramBar.userData.glow.dispose();
+      this.ramBar = null;
+    }
+    if (this.ramBar) this.ramBar.userData.glow.emissiveIntensity = 1.2 + Math.sin(this.time * 9) * 0.6 + (this.ramT < 2 ? Math.sin(this.time * 30) * 0.5 : 0);
+    const fx = this.g.fx;
+    // Plattfuß: Funken an den Felgen
+    if (this.flatT > 0 && this.speedMs > 6) {
+      this.flatAcc = (this.flatAcc || 0) + dt * 40;
+      while (this.flatAcc > 1) {
+        this.flatAcc -= 1;
+        const w = this.wheels[(Math.random() * this.wheels.length) | 0];
+        if (w && w.grounded && !w.lost) fx.sparks.burst(w.contact, 2, { speed: 4, spread: 0.6, life: 0.3, up: 1 });
+      }
+    }
+    // EMP: elektrische Funken am ganzen Auto
+    if (this.empT > 0) {
+      this.empAcc = (this.empAcc || 0) + dt * 28;
+      while (this.empAcc > 1) {
+        this.empAcc -= 1;
+        _a.set((Math.random() - 0.5) * this.p.dims.w, 0.4 + Math.random() * this.p.dims.h, (Math.random() - 0.5) * this.p.dims.l);
+        this.root.localToWorld(_a);
+        fx.sparks.burst(_a, 2, { speed: 3, spread: 1, life: 0.22, color: 0x9fdcff, up: 0.5 });
+      }
+    }
+  }
   startDrift(dir, speed) { this.driftDir = dir || 1; this.driftV0 = speed; }
   spawn(pos, yaw) {
     _q.setFromAxisAngle(WORLD_UP, yaw);
@@ -245,8 +320,14 @@ export class Car {
     const absV = Math.abs(vLong);
     const Iyy = (m / 12) * (P.dims.w ** 2 + P.dims.l ** 2);
     this.oilT = Math.max(0, this.oilT - dt); this.armorT = Math.max(0, this.armorT - dt);
+    this.flatT = Math.max(0, this.flatT - dt); this.ramT = Math.max(0, this.ramT - dt);
+    this.magnetT = Math.max(0, this.magnetT - dt); this.empT = Math.max(0, this.empT - dt); this.ghostT = Math.max(0, this.ghostT - dt);
+    if (this.magnetT <= 0) this.magnetTarget = null;
+    this.applyGhost();
     const oil = this.oilT > 0 ? 0.28 : 1;
-    const aMax = 1.5 * g.gravity * P.grip; // maximale Querbeschleunigung (v7: mehr Kurvengrip)
+    const flatF = this.flatT > 0 ? 0.6 : 1;               // Plattfuß: deutlich weniger Grip
+    // maximale Querbeschleunigung (v7: mehr Kurvengrip; v8: Flügel bringen bei Tempo mehr)
+    const aMax = 1.5 * g.gravity * P.grip * (flatF < 1 ? 0.78 : 1) * (1 + (P.aeroGrip || 0) * Math.min(1, (speed * speed) / 2500));
 
     // Dummies schlafen lassen, wenn sie ruhig stehen
     if (!this.active) {
@@ -282,10 +363,7 @@ export class Car {
     this.hbPrev = handbrake > 0.5;
     this.hbT = handbrake > 0.5 ? (hbEdge ? 0 : this.hbT + dt) : 9;
     if (hbEdge) this.flipped = false;
-    const rwd = P.drive === 'RWD';
-    // Power-Slide nur bei echtem Kurventempo am Grip-Limit (kein Donut beim Anfahren)
-    const atLimit = Math.abs(yawRate * vLong) > 0.72 * aMax;
-    if (Math.abs(this.steerIn) > 0.85 && drive > 0.9 && vLong > 14 && vLong < 42 && rwd && this.gear > 0 && atLimit) this.powerT += dt; else this.powerT = 0;
+    // Driften startet nur mit der Handbremse (Leertaste) – langes Lenken bricht nie von selbst aus
     if (handbrake > 0.5 && absV > 7 && this.gear > 0) {
       if (!this.flipped && this.hbT < 0.3 && this.driftF >= 0.05 && Math.abs(inp.steer) > 0.5 && Math.sign(inp.steer) !== this.driftDir) {
         this.flipped = true; this.flipT = 1.0;
@@ -299,10 +377,6 @@ export class Car {
         const k = Math.min(1.3, absV * 0.045) * Math.sign(this.steerIn);
         b.applyTorqueImpulse(_imp.copy(_up).multiplyScalar(Iyy * k), true);
       }
-    } else if (this.powerT > 0.35 && this.driftF < 0.05) {
-      this.startDrift(Math.sign(this.steerIn), speed);
-      this.driftF = 0.35;
-      b.applyTorqueImpulse(_imp.copy(_up).multiplyScalar(Iyy * 0.5 * Math.sign(this.steerIn)), true);
     } else {
       // Drift hält, solange Gas anliegt und das Auto schräg steht; Gas weg / Gegenlenken → greift wieder
       const sIn = this.steerIn * this.driftDir;
@@ -355,9 +429,10 @@ export class Car {
     const x = this.rpm / E.redline;
     const curve = clamp(0.62 + 0.95 * x - 0.85 * x * x, 0.35, 1);
     const engineFactor = 0.35 + 0.65 * (this.engineHp / 100);
-    let torque = E.torque * curve * drive * engineFactor * (1 + this.boost * 0.55 * E.turbo);
+    let torque = E.torque * curve * drive * engineFactor * (1 + this.boost * 0.55 * E.turbo) * (this.empT > 0 ? 0.1 : 1);
     this.shiftTimer -= dt;
     if (this.shiftTimer > 0 || this.limiterCut || this.hold) torque = 0;
+    if (rpmWheels > E.redline * 1.015) torque = 0; // Drehzahlbegrenzer hart: über Nenndrehzahl kein Vortrieb mehr
     const driveForce = (torque * ratioAbs * 0.88) / W.r * Math.sign(gearRatio);
     if (this.gear >= 1 && this.shiftTimer <= -0.25 && this.grounded >= 2 && !this.hold) {
       if (this.rpm > E.redline * 0.93 && this.gear < nG && drive > 0.3 && spinAvg < 0.4) {
@@ -377,7 +452,7 @@ export class Car {
       if (w.lost) { w.grounded = false; w.load = 0; continue; }
       _a.copy(w.local).applyQuaternion(_q).add(_pos);
       _b.copy(_up).negate();
-      const hit = g.world.castRayAndGetNormal(new R.Ray(_a, _b), maxLen, true, undefined, undefined, undefined, b);
+      const hit = g.world.castRayAndGetNormal(new R.Ray(_a, _b), maxLen, true, undefined, this.ghostOn ? GHOST_GROUPS : RAY_GROUPS, undefined, b);
       if (!hit) { w.grounded = false; w.load = 0; w.comp = 0; w.dist = maxLen; w.spinAmt *= 0.95; continue; }
       grounded++;
       const dist = hit.timeOfImpact;
@@ -405,7 +480,7 @@ export class Car {
       const wt = vp.x * w.side.x + vp.y * w.side.y + vp.z * w.side.z;
       w.vLong = wl; w.vLat = wt;
 
-      const mu = surf.mu * P.grip * oil * (w.front ? 1 : 1.06 * rearGripF);
+      const mu = surf.mu * P.grip * (surf.off ? P.tireOff ?? 1 : P.tireOn ?? 1) * oil * flatF * (w.front ? 1 : 1.06 * rearGripF);
       const maxF = mu * Fs;
       const sp = Math.hypot(wl, wt);
       // Seitenkraft: sättigt ohne Abfall -> berechenbar, kein Ausbrechen
@@ -427,7 +502,7 @@ export class Car {
         const eb = (0.06 * E.torque * ratioAbs) / W.r * x * driveW[w.front ? 0 : 1];
         Fx -= Math.sign(wl) * Math.min(eb, (Math.abs(wl) * mq) / dt * 0.3);
       }
-      Fx -= Math.sign(wl) * Math.min(Fs * 0.012 * surf.roll, (Math.abs(wl) * mq) / dt * 0.1);
+      Fx -= Math.sign(wl) * Math.min(Fs * 0.012 * surf.roll * (surf.off ? P.offRoll ?? 1 : 1), (Math.abs(wl) * mq) / dt * 0.1);
       if (sp < 1.0 && drive < 0.05) Fx = clamp((-wl * mq) / dt * 0.3, -maxF, maxF);
       // Reibungskreis
       const tot = Math.hypot(Fx, Fy);
@@ -495,7 +570,7 @@ export class Car {
         const sn = _c.length();
         if (sn > 0.02) {
           _c.multiplyScalar(1 / sn);
-          const aPath = Math.min(aMax * 0.38, 0.8 * sn * vH) * dF;
+          const aPath = Math.min(aMax * 0.38 * (P.driftEase ?? 1), 0.8 * sn * vH) * dF;
           b.applyImpulse(_imp.copy(_c).multiplyScalar(m * aPath * dt), true);
         }
         // Schwung halten: mit Gas bleibt das Drift-Tempo fast erhalten
@@ -503,7 +578,7 @@ export class Car {
           const vT = this.driftV0 * (0.9 + 0.12 * drive);
           const push = (vH < vT ? 2.5 + clamp((vT - vH) * 1.6, 0, 10) : 0) * drive * dF;
           b.applyImpulse(_imp.copy(_a).multiplyScalar(m * push * dt), true);
-          this.driftV0 = Math.max(this.driftV0 - dt * 1.2, Math.min(this.driftV0, vH + 4));
+          this.driftV0 = Math.max(this.driftV0 - (dt * 1.2) / (P.driftEase ?? 1), Math.min(this.driftV0, vH + 4));
         }
       }
     }
@@ -513,10 +588,22 @@ export class Car {
     if (this.nitro > 0) {
       this.nitro = Math.max(0, this.nitro - dt);
       if (grounded >= 2) { _a.copy(_fwd).setY(0).normalize(); b.applyImpulse(_imp.copy(_a).multiplyScalar(m * 10.5 * dt), true); }
-      this.flame = Math.max(this.flame, 0.75 + Math.random() * 0.25);
+      this.boostFlame = Math.max(this.boostFlame, 0.75 + Math.random() * 0.25);   // blauer Nitro-Strahl
+    }
+    // ---- Magnet: zieht zum Vordermann (bis auf ~6 m heran)
+    if (this.magnetT > 0 && this.magnetTarget && !this.magnetTarget.disposed) {
+      const tp = this.magnetTarget.root.position;
+      _a.set(tp.x - _pos.x, 0, tp.z - _pos.z);
+      const d = _a.length();
+      if (d > 6 && d < 160) b.applyImpulse(_imp.copy(_a).multiplyScalar((m * Math.min(11, 4 + d * 0.12) * dt) / d), true);
+    }
+    // ---- Plattfuß: Felgen bremsen
+    if (this.flatT > 0 && grounded >= 2 && vH > 2) {
+      _a.set(lin.x, 0, lin.z).normalize();
+      b.applyImpulse(_imp.copy(_a).multiplyScalar(-m * Math.min(2.2, vH * 0.08) * dt), true);
     }
     // ---- Mini-Turbo: langer, sauberer Drift lädt auf – beim Rausgehen gibt's Schub
-    if (this.drifting && vH > 9 && grounded >= 3 && !this.onGrass) this.driftCharge += dt;
+    if (this.drifting && vH > 9 && grounded >= 3 && !this.onGrass) this.driftCharge += dt * (P.chargeMul ?? 1);
     const lvl = this.driftCharge > 3.4 ? 3 : this.driftCharge > 2.1 ? 2 : this.driftCharge > 1.0 ? 1 : 0;
     if (lvl > this.driftLevel && this.active) this.events.push({ type: 'driftlevel', level: lvl });
     this.driftLevel = lvl;
@@ -528,7 +615,7 @@ export class Car {
     if (this.miniTurbo > 0) {
       this.miniTurbo = Math.max(0, this.miniTurbo - dt);
       if (grounded >= 2) { _a.copy(_fwd).setY(0).normalize(); b.applyImpulse(_imp.copy(_a).multiplyScalar(m * 6 * dt), true); }
-      this.flame = Math.max(this.flame, 0.55 + Math.random() * 0.25);
+      this.boostFlame = Math.max(this.boostFlame, 0.55 + Math.random() * 0.25);
     }
     // Funken an den Hinterrädern zeigen die Ladestufe
     if (this.driftLevel > 0 && this.drifting) {
@@ -543,8 +630,8 @@ export class Car {
 
     // ---- Abtrieb + Luftwiderstand
     const v2 = speed * speed;
-    if (grounded > 0) b.applyImpulse(_imp.copy(_up).multiplyScalar(-1.8 * v2 * (m / 1400) * dt), true);
-    b.applyImpulse(_imp.set(lin.x, lin.y, lin.z).multiplyScalar(-0.5 * speed * dt * (this.nitro > 0 ? 0.55 : 1)), true);
+    if (grounded > 0) b.applyImpulse(_imp.copy(_up).multiplyScalar(-(P.downforce ?? 1.8) * v2 * (m / 1400) * dt), true);
+    b.applyImpulse(_imp.set(lin.x, lin.y, lin.z).multiplyScalar(-(P.drag ?? 0.5) * speed * dt * (this.nitro > 0 ? 0.55 : 1)), true);
 
     // ---- In der Luft: sanft aufrichten
     if (grounded === 0) {
@@ -559,7 +646,9 @@ export class Car {
     this.speed = absV * 3.6;
 
     // ---- Fehlzündungen im Schiebebetrieb
-    const overrun = drive < 0.08 && this.rpm > E.redline * 0.5 && this.gear > 0;
+    // Schiebebetrieb knallt nur kurz nach dem Gaswegnehmen (kein Dauerknattern)
+    this.liftT = drive < 0.1 ? (this.liftT ?? 9) + dt : 0;
+    const overrun = drive < 0.08 && this.liftT < 1.6 && this.rpm > E.redline * 0.5 && this.gear > 0;
     if (this.prevThrottle > 0.5 && drive < 0.1) {
       if (E.turbo > 0 && this.boost > 0.35) this.events.push({ type: 'blowoff', amount: this.boost, flutter: !!E.flutter });
       if (this.rpm > E.redline * 0.45) {
@@ -568,7 +657,7 @@ export class Car {
       }
     }
     if (overrun && Math.random() < dt * 4 * x) this.popQueue.push(this.time + Math.random() * 0.1);
-    if (this.limiterCut && !this._limPrev && Math.random() < 0.55) this.popQueue.push(this.time);
+    // (kein Knallen am Begrenzer: Flammen nur beim Gaswegnehmen/Hochschalten)
     this._limPrev = this.limiterCut;
     this.prevThrottle = drive;
     if (E.turbo > 0 && drive < 0.1) this.boost *= Math.exp(-dt * 6);
@@ -642,7 +731,12 @@ export class Car {
       if (part.hp <= 0) { this.detachPart(part, dirInto, impactSpeed); labels.push(part.label + ' ab!'); }
       else if (part.hp < part.looseAt && part.state === 'ok') { part.state = 'loose'; labels.push(part.label + ' lose'); }
     }
-    this.engineHp = Math.max(0, this.engineHp - (local.z < -l * 0.18 ? 62 : 10) * s);
+    if (this.g.derby) {
+      // Derby: Treffer mit der Nase kosten weniger als Treffer in Seite und Heck; der Motor hält mehr aus
+      // je Treffer gedeckelt + kurze Schonzeit, damit Dauerkontakt/Startcrash nicht sofort alles entscheidet
+      if (this.time - (this.derbyHitT ?? -9) > 0.3) { this.derbyHitT = this.time; this.derbyHp = Math.max(0, this.derbyHp - (local.z < -l * 0.3 ? 7 : 13) * Math.min(s, 1.4)); }
+      this.engineHp = Math.max(30, this.engineHp - (local.z < -l * 0.18 ? 62 : 10) * s * 0.12);
+    } else this.engineHp = Math.max(0, this.engineHp - (local.z < -l * 0.18 ? 62 : 10) * s);
     for (const w of this.wheels) {
       if (w.lost) continue;
       const dd = Math.hypot(local.x - w.local.x, local.z - w.local.z);
@@ -752,11 +846,17 @@ export class Car {
     this.input.throttle = st.throttle;
     this.flame = Math.max(this.flame, st.flame);
     this.nitro = st.flags & 1 ? 0.2 : 0;
+    this.miniTurbo = st.flags & 32 ? 0.2 : 0;
+    this.flatT = st.flags & 64 ? 0.3 : 0;
+    this.ramT = st.flags & 128 ? 0.5 : 0;
+    this.ghostT = st.flags & 256 ? 0.3 : 0;
+    this.empT = st.flags & 512 ? 0.3 : 0;
+    this.applyGhost();
     this.armorT = st.flags & 2 ? 0.5 : 0;
     this.drifting = !!(st.flags & 4);
     this.oilT = st.flags & 8 ? 0.3 : 0;
     this.limiterCut = !!(st.flags & 16);
-    if (this.nitro > 0) this.flame = Math.max(this.flame, 0.8);
+    if (this.nitro > 0 || this.miniTurbo > 0) this.boostFlame = Math.max(this.boostFlame, 0.8);
     this.grounded = 4;
     const W = this.p.wheel;
     const pos = this.root.position;
@@ -825,6 +925,7 @@ export class Car {
       this.rollV += ((rT - this.roll) * 80 - this.rollV * 10) * dt; this.roll += this.rollV * dt;
       this.sway.rotation.set(this.pitch, 0, this.roll);
     }
+    this.updatePowerFx(dt);
     const W = this.p.wheel;
     const fx = this.g.fx;
     const lin = this.body.linvel();
@@ -910,7 +1011,9 @@ export class Car {
 
     // Flammen aus dem Auspuff
     this.flame *= Math.exp(-dt * 9);
-    for (const f of this.flames) updateFlame(f, this.flame, this.time);
+    this.boostFlame *= Math.exp(-dt * 9);
+    const bf = this.boostFlame > this.flame;
+    for (const f of this.flames) updateFlame(f, bf ? this.boostFlame : this.flame, this.time, bf ? 1 : 0);
     // Glut-Funken + Rauchwölkchen bei jedem Knall
     if (this.popFx) {
       const s = this.popFx; this.popFx = 0;

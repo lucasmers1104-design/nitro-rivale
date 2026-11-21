@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------------
 import * as THREE from 'three';
 import { createFlame, updateFlame } from './fx.js';
-import { OilFx, BlastFx } from './itemfx.js';
+import { OilFx, BlastFx, SmokeWall, Bolt, buildSpikeStrip, buildRamp, rampHull, RAMP } from './itemfx.js';
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 
@@ -16,14 +16,21 @@ export const ITEMS = {
   shock: { name: 'Schockwelle', hint: 'Schleudert alle Autos in der Nähe weg' },
   armor: { name: 'Stahlpanzer', hint: '7 s unzerstörbar, Rammen tut doppelt weh' },
   repair: { name: 'Reparatur', hint: 'Auto wieder wie neu' },
+  smoke: { name: 'Nebelwand', hint: 'Dichter Rauch hinter dir – Verfolger sehen nichts' },
+  spikes: { name: 'Nagelband', hint: 'Plattfuß für jeden, der drüberfährt' },
+  ramp: { name: 'Rampe', hint: 'Sprungschanze hinter dir abstellen' },
+  ram: { name: 'Rammbock', hint: 'Nächster Crash: dreifacher Schaden beim Gegner' },
+  magnet: { name: 'Magnet', hint: 'Zieht dich an den Vordermann heran' },
+  emp: { name: 'EMP-Blitz', hint: 'Alle vor dir verlieren kurz die Motorleistung' },
+  ghost: { name: 'Geist', hint: '4 s durch Autos und Fässer fahren' },
 };
 export const ITEM_ORDER = Object.keys(ITEMS);
 
 // Gewichte nach Platz: vorne eher Verteidigung, hinten eher Aufholen
 const WEIGHTS = [
-  { oil: 3, barrel: 3, jump: 2, armor: 2, nitro: 1, shock: 1 },
-  { nitro: 3, rocket: 2, oil: 2, barrel: 2, jump: 2, shock: 2, armor: 1, repair: 1 },
-  { nitro: 4, rocket: 3, shock: 2, repair: 2, armor: 1, jump: 1 },
+  { oil: 3, barrel: 3, spikes: 3, smoke: 2, jump: 2, armor: 2, ramp: 1, nitro: 1, shock: 1, ghost: 1 },
+  { nitro: 3, rocket: 2, oil: 2, barrel: 2, spikes: 2, smoke: 2, jump: 2, shock: 2, ram: 2, armor: 1, repair: 1, magnet: 1, ramp: 1, ghost: 1 },
+  { nitro: 4, rocket: 3, magnet: 3, emp: 2, ram: 2, shock: 2, repair: 2, ghost: 2, armor: 1, jump: 1 },
 ];
 
 function boxTexture() {
@@ -44,7 +51,7 @@ function boxTexture() {
 }
 
 export class Items {
-  constructor(game, track, { enabled = true } = {}) {
+  constructor(game, track, { enabled = true, arena = null } = {}) {
     this.g = game;
     this.track = track;
     this.enabled = enabled;
@@ -65,7 +72,17 @@ export class Items {
     const tex = boxTexture();
     const mat = new THREE.MeshStandardMaterial({ map: tex, emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: 0.55, roughness: 0.35, transparent: true, opacity: 0.92 });
     const geo = new THREE.BoxGeometry(1.25, 1.25, 1.25);
-    for (const f of [0.17, 0.41, 0.63, 0.86]) {
+    // Derby-Arena: zwei Kistenringe in der Arena statt Reihen an der Strecke
+    const addBox = (p, phase) => { const mesh = new THREE.Mesh(geo, mat); mesh.castShadow = true; mesh.position.copy(p); this.group.add(mesh); this.boxes.push({ pos: p, mesh, off: 0, phase }); };
+    if (arena) {
+      for (const [n, rf] of [[5, 0.32], [8, 0.68]]) for (let k = 0; k < n; k++) {
+        const a = (k / n) * Math.PI * 2 + rf * 3;
+        const p = new THREE.Vector3(arena.x + Math.cos(a) * arena.r * rf, 0, arena.z + Math.sin(a) * arena.r * rf);
+        p.y = track.heightAt(p.x, p.z) + 1.15;
+        addBox(p, k * 0.9);
+      }
+    }
+    for (const f of arena ? [] : [0.17, 0.41, 0.63, 0.86]) {
       let best = Math.round(f * N), bc = 9;
       for (let d = -50; d <= 50; d += 5) {
         const i = (Math.round(f * N) + d + N) % N;
@@ -92,6 +109,9 @@ export class Items {
     this.matFin = new THREE.MeshStandardMaterial({ color: 0xd9322b, flatShading: true });
     this.oilFx = new OilFx(this.group, track, game.envMap);
     this.blastFx = new BlastFx(this.group, track, game);
+    this.smokeWall = new SmokeWall(this.group, track);
+    this.beams = new Map();      // Magnet-Strahlen je Auto
+    this.bolts = [];             // EMP-Blitze
   }
 
   // Zufallsgewinn; rankFrac: 0 = Führender, 1 = Letzter
@@ -137,6 +157,8 @@ export class Items {
 
     this.oilFx?.update(dt);
     this.blastFx?.update(dt);
+    this.smokeWall?.update(dt);
+    this.updateBeams(dt, cars);
     // Gefahren: Ölflecken + Sprengfässer
     for (let k = this.hazards.length - 1; k >= 0; k--) {
       const h = this.hazards[k];
@@ -154,11 +176,32 @@ export class Items {
         h.mesh.rotation.y += dt * 0.4;
       }
       if (h.type === 'oil') h.mesh.material.opacity = 0.92 * clamp((h.life - h.age) / 3, 0, 1);
+      if (h.type === 'ramp' && h.age > h.life - 1.4) {
+        // versinkt am Ende im Boden
+        const k = (h.age - (h.life - 1.4)) / 1.4;
+        h.mesh.position.y = h.pos.y - k * (RAMP.h + 0.3);
+        if (h.body && k > 0.3) { this.g.world.removeRigidBody(h.body); h.body = null; }
+      }
+      if (h.type === 'spikes') h.mesh.position.y = h.pos.y + Math.min(0, (h.age - 0.25) * 0.4);
       let gone = h.age > h.life;
-      if (!gone && h.age > 0.45) {
+      if (!gone && h.age > 0.45 && h.type !== 'ramp') {
         for (const c of cars) {
           if (!this.owned(c.car)) continue;
+          if (c.car.ghostT > 0) continue;          // Geister fahren durch alles hindurch
           if (c.car === h.owner && h.age < 1.6) continue;
+          if (h.type === 'spikes') {
+            if (h.hit.has(c.car)) continue;
+            const p = c.car.body.translation();
+            const dx = p.x - h.pos.x, dz = p.z - h.pos.z, cy = Math.cos(h.yaw), sy = Math.sin(h.yaw);
+            const lx = dx * cy - dz * sy, lz = dx * sy + dz * cy;   // ins Nagelband-System drehen
+            if (Math.abs(lx) < h.w / 2 + 0.4 && Math.abs(lz) < 0.9 + c.car.p.dims.l * 0.1 && Math.abs(p.y - h.pos.y) < 2) {
+              h.hit.add(c.car);
+              c.car.flatT = 6;
+              this.events.push({ type: 'spiked', car: c.car });
+              this.g.fx.sparks.burst(new THREE.Vector3(p.x, h.pos.y + 0.2, p.z), 24, { speed: 6, spread: 1, life: 0.5 });
+            }
+            continue;
+          }
           const p = c.car.body.translation();
           const d = Math.hypot(p.x - h.pos.x, p.z - h.pos.z);
           if (Math.abs(p.y - h.pos.y) > 2.5) continue;
@@ -169,7 +212,7 @@ export class Items {
           if (h.type === 'barrel' && d < 2.6) { this.explode(h.pos, 7, 1.15, h.owner); this.emit?.({ type: 'boom', hz: h.id, pos: [h.pos.x, h.pos.y, h.pos.z], r: 7, k: 1.15 }); gone = true; break; }
         }
       }
-      if (gone) { this.group.remove(h.mesh); this.hazards.splice(k, 1); }
+      if (gone) { this.group.remove(h.mesh); if (h.body) this.g.world.removeRigidBody(h.body); this.hazards.splice(k, 1); }
     }
 
     // Raketen
@@ -177,7 +220,7 @@ export class Items {
       const r = this.rockets[k];
       r.age += dt;
       let aim = null;
-      if (r.target && !r.target.disposed) { const q = r.target.body.translation(); aim = new THREE.Vector3(q.x, q.y + 0.2, q.z); }
+      if (r.target && !r.target.disposed && r.target.ghostT <= 0) { const q = r.target.body.translation(); aim = new THREE.Vector3(q.x, q.y + 0.2, q.z); }
       else {
         // ohne Ziel: der Strecke folgen
         const n = this.track.nearest(r.pos.x, r.pos.z, 2);
@@ -203,6 +246,7 @@ export class Items {
       for (const c of cars) {
         if (!this.owned(c.car)) continue;
         if (c.car === r.owner && r.age < 0.5) continue;
+        if (c.car.ghostT > 0) continue;   // Raketen fliegen durch Geister
         const p = c.car.body.translation();
         if (Math.hypot(p.x - r.pos.x, p.y - r.pos.y, p.z - r.pos.z) < 2.4) { hit = true; break; }
       }
@@ -251,7 +295,7 @@ export class Items {
     this.flash(pos, 0xff8a2a, radius * 0.9);
     this.blastFx?.blast(pos, radius);
     for (const car of this.g.cars?.() || []) {
-      if (!this.owned(car)) continue;
+      if (!this.owned(car) || car.ghostT > 0) continue;
       const p = car.body.translation();
       const d = Math.hypot(p.x - pos.x, p.y - pos.y, p.z - pos.z);
       if (d > radius) continue;
@@ -342,7 +386,69 @@ export class Items {
   }
 
   // Power-up einsetzen; ahead: Auto direkt vor dem Nutzer (Raketenziel)
-  use(car, ahead = null) {
+  spawnSpikes(pos, yaw, id, owner) {
+    const w = 4.6;
+    const mesh = buildSpikeStrip(w);
+    mesh.position.copy(pos); mesh.position.y -= 0.25; mesh.rotation.y = yaw;
+    // dem Gelände folgen (leicht kippen)
+    const fx = Math.cos(yaw), fz = -Math.sin(yaw);
+    const hl = this.track.heightAt(pos.x - fx * w / 2, pos.z - fz * w / 2), hr = this.track.heightAt(pos.x + fx * w / 2, pos.z + fz * w / 2);
+    mesh.rotation.z = Math.atan2(hr - hl, w);
+    this.group.add(mesh);
+    this.hazards.push({ type: 'spikes', id, mesh, pos: pos.clone(), yaw, w, owner, age: 0, life: 25, hit: new Set() });
+  }
+  spawnRamp(pos, yaw, id, owner) {
+    const mesh = buildRamp();
+    mesh.position.copy(pos); mesh.rotation.y = yaw;
+    // Neigung des Geländes in Fahrtrichtung übernehmen
+    const fx = -Math.sin(yaw), fz = -Math.cos(yaw);
+    const hf = this.track.heightAt(pos.x + fx * RAMP.l / 2, pos.z + fz * RAMP.l / 2), hb = this.track.heightAt(pos.x - fx * RAMP.l / 2, pos.z - fz * RAMP.l / 2);
+    mesh.rotation.x = Math.atan2(hf - hb, RAMP.l);
+    this.group.add(mesh);
+    mesh.updateMatrixWorld(true);
+    const R = this.g.RAPIER;
+    const q = mesh.quaternion;
+    const body = this.g.world.createRigidBody(R.RigidBodyDesc.fixed().setTranslation(pos.x, pos.y - 0.02, pos.z).setRotation({ x: q.x, y: q.y, z: q.z, w: q.w }));
+    const col = R.ColliderDesc.convexHull(rampHull());
+    if (col) { col.setFriction(0.9); this.g.world.createCollider(col, body); }
+    this.hazards.push({ type: 'ramp', id, mesh, body, pos: pos.clone(), yaw, owner, age: 0, life: 22 });
+  }
+  // EMP trifft ein Auto: Motor kurz tot, Nitro weg (nur das eigene Auto wird verändert)
+  empHit(car, by) {
+    const t = car.root.position;
+    this.bolts.push({ bolt: new Bolt(this.group, 0x8fd0ff, 0.5, 14), car, age: 0, dur: 0.45, sky: new THREE.Vector3(t.x + (Math.random() - 0.5) * 6, t.y + 26, t.z + (Math.random() - 0.5) * 6) });
+    this.g.fx.sparks.burst(t.clone().setY(t.y + 0.8), 30, { speed: 6, spread: 1, life: 0.5, color: 0x9fdcff });
+    if (car.ghostT > 0) return;
+    if (this.owned(car)) { car.empT = 2.2; car.nitro = 0; car.miniTurbo = 0; }
+    this.events.push({ type: 'emp', car, by });
+  }
+  updateBeams(dt, cars) {
+    const cam = this.g.camera?.position || new THREE.Vector3(0, 50, 0);
+    // Magnet: Strahl vom Auto zum Ziel
+    for (const c of this.g.cars?.() || []) {
+      let b = this.beams.get(c);
+      const on = c.magnetT > 0 && c.magnetTarget && !c.magnetTarget.disposed;
+      if (on) {
+        if (!b) { b = { a: new Bolt(this.group, 0xc69bff, 0.45, 18), b: new Bolt(this.group, 0x7fd6ff, 0.22, 18) }; this.beams.set(c, b); }
+        const p1 = c.root.position.clone(), p2 = c.magnetTarget.root.position.clone();
+        p1.y += 0.8; p2.y += 0.8;
+        const op = Math.min(1, c.magnetT * 3);
+        b.a.set(p1, p2, cam, 1.2, op * 0.9); b.b.set(p1, p2, cam, 0.7, op);
+      } else if (b) { b.a.dispose(); b.b.dispose(); this.beams.delete(c); }
+    }
+    // EMP-Blitze aus dem Himmel
+    for (let k = this.bolts.length - 1; k >= 0; k--) {
+      const e = this.bolts[k];
+      e.age += dt;
+      const t = e.car.root.position.clone(); t.y += 0.6;
+      const op = e.age < e.dur ? (Math.random() < 0.75 ? 1 : 0.25) : 0;
+      e.bolt.set(e.sky, t, cam, 4, op);
+      if (e.age > e.dur) { e.bolt.dispose(); this.bolts.splice(k, 1); }
+    }
+  }
+  // Dichte der Nebelwand an einem Punkt (für Bots und den Sicht-Schleier)
+  smokeAt(p) { return this.smokeWall ? this.smokeWall.density(p) : 0; }
+  use(car, ahead = null, aheadAll = []) {
     const it = car.item;
     if (!it || car.itemRoll > 0) return null;
     car.item = null;
@@ -372,6 +478,23 @@ export class Items {
       Object.assign(ev, { pos: [start.x, start.y, start.z], dir: [flatF.x, flatF.y, flatF.z], speed, target: ahead?.netId || null });
     } else if (it === 'shock') { this.shockAt(pos, car); ev.pos = [pos.x, pos.y, pos.z]; }
     else if (it === 'armor') car.armorT = 7;
+    else if (it === 'smoke') this.smokeWall.start(car, 2.4);
+    else if (it === 'spikes') {
+      const yaw = Math.atan2(-flatF.x, -flatF.z);
+      this.spawnSpikes(behind, yaw, id, car); Object.assign(ev, { pos: [behind.x, behind.y, behind.z], yaw });
+    } else if (it === 'ramp') {
+      const yaw = Math.atan2(-flatF.x, -flatF.z);
+      const rp = pos.clone().addScaledVector(flatF, -(car.p.dims.l / 2 + RAMP.l / 2 + 2.2));
+      rp.y = this.track.heightAt(rp.x, rp.z);
+      this.spawnRamp(rp, yaw, id, car); Object.assign(ev, { pos: [rp.x, rp.y, rp.z], yaw });
+    } else if (it === 'ram') car.ramT = 10;
+    else if (it === 'magnet') { car.magnetT = 3.2; car.magnetTarget = ahead && ahead.ghostT <= 0 ? ahead : null; ev.target = car.magnetTarget?.netId || null; }
+    else if (it === 'emp') {
+      const targets = (aheadAll || []).filter((c) => c && c !== car).slice(0, 7);
+      for (const tc of targets) this.empHit(tc, car);
+      ev.targets = targets.map((c) => c.netId).filter(Boolean);
+      this.g.fx && this.blastFx.dome(pos.clone(), 0x7fb8ff, 7, 0.4);
+    } else if (it === 'ghost') car.ghostT = 4;
     this.events.push({ type: 'use', car, item: it });
     this.emit?.(ev);
     return it;
@@ -387,6 +510,11 @@ export class Items {
       else if (e.item === 'barrel' && e.pos) this.spawnBarrel(V(e.pos), e.hid, car);
       else if (e.item === 'rocket' && e.pos) this.spawnRocket(V(e.pos), V(e.dir), e.speed, car, e.target ? byId(e.target) : null, e.hid);
       else if (e.item === 'shock' && e.pos) this.shockAt(V(e.pos), car);
+      else if (e.item === 'smoke' && car) this.smokeWall.start(car, 2.4);
+      else if (e.item === 'spikes' && e.pos) this.spawnSpikes(V(e.pos), e.yaw, e.hid, car);
+      else if (e.item === 'ramp' && e.pos) this.spawnRamp(V(e.pos), e.yaw, e.hid, car);
+      else if (e.item === 'magnet' && car) { car.magnetT = 3.2; car.magnetTarget = e.target ? byId(e.target) : null; }
+      else if (e.item === 'emp') { for (const id of e.targets || []) { const tc = byId(id); if (tc) this.empHit(tc, car); } if (car) this.blastFx.dome(car.root.position.clone(), 0x7fb8ff, 7, 0.4); }
       if (car) this.events.push({ type: 'use', car, item: e.item, remote: true });
       return;
     }
@@ -399,17 +527,19 @@ export class Items {
   }
 
   clear() {
-    for (const h of this.hazards) this.group.remove(h.mesh);
+    for (const h of this.hazards) { this.group.remove(h.mesh); if (h.body) { try { this.g.world.removeRigidBody(h.body); } catch { /* Welt schon weg */ } h.body = null; } }
     for (const r of this.rockets) this.group.remove(r.mesh);
     for (const r of this.rings) this.group.remove(r.mesh);
     this.hazards = []; this.rockets = []; this.rings = [];
-    this.oilFx?.clear(); this.blastFx?.clear();
+    this.oilFx?.clear(); this.blastFx?.clear(); this.smokeWall?.clear();
+    for (const b of this.beams.values()) { b.a.dispose(); b.b.dispose(); } this.beams.clear();
+    for (const e of this.bolts) e.bolt.dispose(); this.bolts = [];
     for (const b of this.boxes) { b.off = 0; b.mesh.visible = true; }
   }
 
   dispose() {
     this.clear();
-    this.oilFx?.dispose(); this.blastFx?.dispose();
+    this.oilFx?.dispose(); this.blastFx?.dispose(); this.smokeWall?.dispose();
     this.g.scene.remove(this.group);
     this.group.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
   }

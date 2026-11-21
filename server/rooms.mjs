@@ -4,11 +4,20 @@
 // ---------------------------------------------------------------------------
 const CODE_CH = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const LEVELS = ['tal', 'canyon', 'pass', 'kueste'];
-const CARS = ['brutus', 'kaze', 'rhino'];
+const CARS = ['brutus', 'kaze', 'rhino', 'vipera', 'brummi'];
 const MAX = 8;
 const clampN = (v, a, b, d) => (Number.isFinite(+v) ? Math.min(b, Math.max(a, Math.round(+v))) : d);
 const str = (v, n, d = '') => (typeof v === 'string' ? v.replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, n) : d) || d;
 const color = (v) => (typeof v === 'string' && /^#[0-9a-fA-F]{6}$/.test(v) ? v : '#d9322b');
+// Tuning eines Autos (Werkstatt): nur bekannte Felder in erlaubten Grenzen
+const TIRES = ['street', 'grip', 'drift', 'offroad'];
+const tune = (t) => {
+  const o = t && typeof t === 'object' ? t : {};
+  const lv = (v) => clampN(v, 0, 3, 0);
+  return { aero: lv(o.aero), engine: lv(o.engine), armor: lv(o.armor), tires: TIRES.includes(o.tires) ? o.tires : 'street', horn: typeof o.horn === 'string' && /^[a-z]{2,16}$/.test(o.horn) ? o.horn : '' };
+};
+const MODES = ['race', 'elim', 'derby', 'free'];
+const CLASSES = ['open', 'D', 'C', 'B', 'A', 'S'];
 
 const READY_WAIT = 60000; // so lange wird höchstens auf Nachzügler gewartet
 const GO_IN = 5400; // ms vom Countdown-Signal bis Grün (2,4 s Kamerafahrt + 3 Lampen)
@@ -27,7 +36,7 @@ export class Hub {
   // ------------------------------------------------------------ Verbindungen
   connect(conn) {
     const id = 'p' + (++this.seq).toString(36);
-    const c = { id, conn, name: 'Fahrer', car: 'brutus', color: '#d9322b', sound: '', room: null, msgs: 0, winStart: this.now() };
+    const c = { id, conn, name: 'Fahrer', car: 'brutus', color: '#d9322b', sound: '', tune: tune(null), room: null, msgs: 0, winStart: this.now() };
     this.clients.set(id, c);
     this.send(c, { t: 'welcome', id, v: 1 });
     return c;
@@ -67,6 +76,7 @@ export class Hub {
       case 's': if (room && room.race && Array.isArray(m.c)) this.relayState(c, room, m); break;
       case 'ev': if (room && room.race && m.e && typeof m.e === 'object') this.relayEvent(c, room, m.e); break;
       case 'fin': if (room && room.race) this.finish(c, room, m); break;
+      case 'out': if (room && room.race && m.race === room.race.id) this.out(c, room, m); break;
       case 'stop': if (room && room.race && this.isHost(c, room)) this.end(room, room.race.id); break;
       case 'chat': if (room) this.broadcast(room, { t: 'chat', from: c.id, text: str(m.text, 120) }); break;
     }
@@ -78,6 +88,7 @@ export class Hub {
     if (CARS.includes(m.car)) c.car = m.car;
     if (m.color) c.color = color(m.color);
     if (typeof m.sound === 'string') c.sound = str(m.sound, 24);
+    if (m.tune) c.tune = tune(m.tune);
   }
   newCode() {
     for (let k = 0; k < 1000; k++) {
@@ -90,7 +101,7 @@ export class Hub {
     this.leave(c);
     const code = this.newCode();
     const room = { code, host: c.id, players: [c.id], bots: [], state: 'lobby', race: null, created: this.now(),
-      settings: { level: 'tal', laps: 3, items: true, skill: 'normal', mode: 'race', fill: false } };
+      settings: { level: 'tal', laps: 3, items: true, skill: 'normal', mode: 'race', fill: false, cls: 'open' } };
     this.rooms.set(code, room);
     c.room = code;
     this.log(`Raum ${code} erstellt von ${c.name}`);
@@ -140,18 +151,19 @@ export class Hub {
     if (m.laps != null) s.laps = clampN(m.laps, 1, 10, s.laps);
     if (typeof m.items === 'boolean') s.items = m.items;
     if (['leicht', 'normal', 'profi'].includes(m.skill)) s.skill = m.skill;
-    if (['race', 'free'].includes(m.mode)) s.mode = m.mode;
+    if (MODES.includes(m.mode)) s.mode = m.mode;
+    if (CLASSES.includes(m.cls)) s.cls = m.cls;
     if (typeof m.fill === 'boolean') s.fill = m.fill;
   }
   setBots(room, list) {
     if (!Array.isArray(list)) return;
     const free = MAX - room.players.length;
-    room.bots = list.slice(0, Math.max(0, free)).map((b) => ({ name: str(b?.name, 16, 'Bot'), car: CARS.includes(b?.car) ? b.car : 'brutus', color: color(b?.color) }));
+    room.bots = list.slice(0, Math.max(0, free)).map((b) => ({ name: str(b?.name, 16, 'Bot'), car: CARS.includes(b?.car) ? b.car : 'brutus', color: color(b?.color), tune: tune(b?.tune) }));
   }
   view(room) {
     return {
       t: 'room', code: room.code, host: room.host, state: room.state, settings: room.settings, bots: room.bots,
-      players: room.players.map((pid) => { const c = this.clients.get(pid); return { id: pid, name: c.name, car: c.car, color: c.color, sound: c.sound }; }),
+      players: room.players.map((pid) => { const c = this.clients.get(pid); return { id: pid, name: c.name, car: c.car, color: c.color, sound: c.sound, tune: c.tune }; }),
     };
   }
   sync(room) { this.broadcast(room, this.view(room)); }
@@ -161,14 +173,14 @@ export class Hub {
     if (m && Array.isArray(m.bots)) this.setBots(room, m.bots);
     const s = room.settings;
     const humans = room.players.slice().sort(() => Math.random() - 0.5);
-    const bots = s.mode === 'race' ? room.bots : [];
+    const bots = s.mode !== 'free' ? room.bots : [];
     const grid = [];
-    bots.forEach((b, k) => grid.push({ id: 'b' + (k + 1), slot: grid.length, name: b.name, car: b.car, color: b.color, sound: '', bot: true, owner: room.host }));
-    for (const pid of humans) { const c = this.clients.get(pid); grid.push({ id: pid, slot: grid.length, name: c.name, car: c.car, color: c.color, sound: c.sound, bot: false, owner: pid }); }
-    const race = { id: ++this.raceSeq, grid, ready: new Set(), finished: new Map(), started: false, startedAt: 0, firstHumanFinish: null, timer: null, endTimer: null };
+    bots.forEach((b, k) => grid.push({ id: 'b' + (k + 1), slot: grid.length, name: b.name, car: b.car, color: b.color, sound: '', tune: b.tune || tune(null), bot: true, owner: room.host }));
+    for (const pid of humans) { const c = this.clients.get(pid); grid.push({ id: pid, slot: grid.length, name: c.name, car: c.car, color: c.color, sound: c.sound, tune: c.tune, bot: false, owner: pid }); }
+    const race = { id: ++this.raceSeq, grid, mode: s.mode, ready: new Set(), finished: new Map(), out: new Map(), started: false, startedAt: 0, firstHumanFinish: null, timer: null, endTimer: null };
     room.race = race;
     room.state = 'loading';
-    this.broadcast(room, { t: 'load', race: { id: race.id, level: s.level, laps: s.laps, items: s.items, skill: s.skill, mode: s.mode, grid, seed: Math.floor(Math.random() * 1e9) } });
+    this.broadcast(room, { t: 'load', race: { id: race.id, level: s.mode === 'derby' ? 'tal' : s.level, laps: s.laps, items: s.items, skill: s.skill, mode: s.mode, cls: s.cls || 'open', grid, seed: Math.floor(Math.random() * 1e9) } });
     this.sync(room);
     this.waitInfo(room);
     race.timer = this.T.setTimeout(() => this.countdown(room, race.id), READY_WAIT); // Nachzügler nicht ewig abwarten
@@ -224,9 +236,43 @@ export class Hub {
     }
     this.checkEnd(room);
   }
+  // Ausscheiden/Derby: ein Auto ist raus. Derby meldet der Besitzer, Ausscheiden der Gastgeber.
+  out(c, room, m) {
+    const r = room.race;
+    if (!r.started || (r.mode !== 'derby' && r.mode !== 'elim')) return;
+    const g = r.grid.find((x) => x.id === m.id);
+    if (!g || r.out.has(g.id) || r.finished.has(g.id)) return;
+    if (r.mode === 'derby' ? g.owner !== c.id : !this.isHost(c, room)) return;
+    const alive = this.alive(room);
+    const place = alive.length;
+    const time = Number.isFinite(Number(m.time)) ? Number(m.time) : (this.now() - r.startedAt) / 1000;
+    r.out.set(g.id, { id: g.id, time, place, out: true });
+    this.broadcast(room, { t: 'out', id: g.id, place, time });
+    this.checkWinner(room);
+  }
+  alive(room) {
+    const r = room.race;
+    return r.grid.filter((g) => !g.gone && !r.out.has(g.id) && !r.finished.has(g.id) && (g.bot ? room.players.includes(g.owner) : room.players.includes(g.id)));
+  }
+  checkWinner(room) {
+    const r = room.race;
+    if (!r || (r.mode !== 'derby' && r.mode !== 'elim') || r.won) return;
+    const alive = this.alive(room);
+    if (alive.length > 1) return;
+    r.won = true;
+    const w = alive[0];
+    if (w) {
+      const time = (this.now() - r.startedAt) / 1000;
+      r.finished.set(w.id, { id: w.id, time, best: null, place: 1 });
+      this.broadcast(room, { t: 'fin', id: w.id, time, best: null, place: 1, winner: true });
+    }
+    if (r.endTimer) this.T.clearTimeout(r.endTimer);
+    r.endTimer = this.T.setTimeout(() => this.end(room, r.id), 4500);
+  }
   checkEnd(room) {
     const r = room.race;
     if (!r || !r.started) return;
+    if (r.mode === 'derby' || r.mode === 'elim') { this.checkWinner(room); return; }
     const humans = r.grid.filter((g) => !g.bot && room.players.includes(g.id));
     if (humans.length && humans.every((g) => r.finished.has(g.id))) {
       if (r.endTimer) this.T.clearTimeout(r.endTimer);
@@ -238,7 +284,7 @@ export class Hub {
     if (!r || r.id !== id || !this.rooms.has(room.code)) return;
     if (r.timer) this.T.clearTimeout(r.timer);
     if (r.endTimer) this.T.clearTimeout(r.endTimer);
-    this.broadcast(room, { t: 'end', race: r.id, finished: [...r.finished.values()] });
+    this.broadcast(room, { t: 'end', race: r.id, finished: [...r.finished.values(), ...r.out.values()] });
     room.race = null;
     room.state = 'lobby';
     this.sync(room);

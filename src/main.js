@@ -6,14 +6,15 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { CARS, CAR_ORDER, SOUNDS } from './presets.js';
+import { normTune, applyTune, perfIndex, restrictFor, restrictedPI, randomTune, classOf, classMax, CLASSES, PARTS, isStock } from './tune.js';
 import { Car, buildCarModel, paintMesh } from './car.js';
 import { buildWorld, Props, gridSlot, Track } from './world.js';
 import { LEVELS, LEVEL_ORDER, THEMES } from './levels.js';
 import { FX } from './fx.js';
-import { GameAudio } from './audio.js';
+import { GameAudio, HORNS } from './audio.js';
 import { Cluster, DamageView } from './hud.js';
 import { Race } from './race.js';
-import { BotDriver } from './bot.js';
+import { BotDriver, DerbyDriver } from './bot.js';
 import { Items, ITEMS, ITEM_ORDER } from './items.js';
 import { ITEM_ICONS, UI_ICONS } from './icons.js';
 import { Net, defaultServerUrl, packCar, unpackCar } from './net.js';
@@ -148,7 +149,7 @@ async function main() {
   let showModel = null, outgoing = null, slide = null;
   function makeShowModel(id, color) {
     const p = CARS[id];
-    const m = buildCarModel(p, color, envMap);
+    const m = buildCarModel(p, color, envMap, sel.tunes?.[id]);
     for (const w of m.wheels) w.hold.position.y = -p.wheel.rest * 0.45;
     const g = new THREE.Group();
     m.root.position.y = -(m.anchorY - p.wheel.rest * 0.45 - p.wheel.r);
@@ -164,6 +165,7 @@ async function main() {
   game.heightAt = (x, z) => (game.track ? game.track.heightAt(x, z) : 0);
   game.fx = new FX(scene, (x, z) => game.heightAt(x, z));
   game.cars = () => allCars();
+  game.camera = camera;
   let eventQueue = null, level = null, props = null, items = null, race = null;
   let minimapBg = null;
 
@@ -213,10 +215,21 @@ async function main() {
   // ------------------------------------------------------------ Autos
   let uid = 0;
   const spawnHeight = (preset, x, z) => game.heightAt(x, z) + preset.dims.h / 2 - 0.16 + preset.wheel.rest * 0.55 + preset.wheel.r + 0.25;
-  const makeCar = (id, color, opts) => { const c = new Car(game, CARS[id], color, opts); c.uid = ++uid; return c; };
+  // Auto bauen; opts.tune = Tuning (Teile + Physik), opts.restrict = Drossel fürs Klassenlimit
+  const makeCar = (id, color, opts = {}) => {
+    const base = CARS[id] || CARS.brutus;
+    const t = opts.tune ? normTune(opts.tune) : null;
+    const p = t && (!isStock(t) || t.horn || (opts.restrict ?? 1) < 1) ? applyTune(base, t, opts.restrict ?? 1) : base;
+    const c = new Car(game, p, color, opts); c.uid = ++uid; c.tuneSrc = t; c.restrict = opts.restrict ?? 1; return c;
+  };
   const sel = Object.assign({ idx: 0, colors: Object.fromEntries(CAR_ORDER.map((id) => [id, CARS[id].colors[0]])), sounds: Object.fromEntries(CAR_ORDER.map((id) => [id, CARS[id].sound])) }, cfg.car || {});
   const soundOf = (id) => sel.sounds[id];
   const selId = () => CAR_ORDER[sel.idx];
+  sel.tunes = Object.assign({}, cfg.tunes || {});
+  const curTune = (id = selId()) => normTune(sel.tunes[id]);
+  // Klassenlimit des aktuellen Rennens (SP-Einstellung oder Lobby des Gastgebers)
+  const raceClass = () => state.classLimit || 'open';
+  const myRestrict = () => restrictFor(CARS[selId()], curTune(), raceClass());
   let player = null;
   let bots = []; // { car, driver, name }
   let dummies = [];
@@ -226,6 +239,7 @@ async function main() {
 
   function disposeCar(c) { if (!c) return; c.dispose(); c.disposed = true; }
   function clearCars() {
+    game.derby = false; state.spectate = null;
     disposeCar(player); player = null;
     for (const b of bots) disposeCar(b.car);
     bots = [];
@@ -246,7 +260,7 @@ async function main() {
     dummies = [];
     const A = game.track.extras.arena;
     if (!A) return;
-    const ids = ['brutus', 'rhino', 'kaze', 'brutus', 'rhino'];
+    const ids = ['brutus', 'rhino', 'kaze', 'brummi', 'vipera'];
     ids.forEach((id, i) => {
       const a = (i / ids.length) * Math.PI * 2 + 0.4;
       const r = 15 + Math.random() * 6;
@@ -280,7 +294,7 @@ async function main() {
   // Auto neu aufbauen (Reparatur-Power-up / F): gleiche Lage, gleiche Fahrt
   function rebuildCar(old) {
     const t = old.body.translation(), r = old.body.rotation(), lv = old.body.linvel(), av = old.body.angvel();
-    const c = makeCar(old.p.id, old.color, { isPlayer: old.isPlayer, ai: old.ai, remote: old.remote, name: old.name });
+    const c = makeCar(old.p.id, old.color, { isPlayer: old.isPlayer, ai: old.ai, remote: old.remote, name: old.name, tune: old.tuneSrc, restrict: old.restrict });
     c.body.setTranslation(t, true); c.body.setRotation(r, true);
     if (!old.remote) { c.body.setLinvel(lv, true); c.body.setAngvel(av, true); }
     c.netId = old.netId; c.netOwned = old.netOwned; c.netSound = old.netSound;
@@ -289,6 +303,8 @@ async function main() {
     for (const g of mp.ghosts.values()) if (g.car === old) g.car = c;
     if (c.netOwned && mp.net) mp.net.send('ev', { e: { type: 'rep', id: c.netId } });
     c.gear = Math.max(1, old.gear); c.rpm = old.rpm; c.item = old.item; c.itemRoll = old.itemRoll;
+    if (game.derby) c.derbyHp = Math.min(100, old.derbyHp + 40); // Derby: Reparatur heilt nur teilweise
+    c.out = old.out;
     c.syncVisual();
     disposeCar(old);
     if (old === player) { player = c; if (playerAuto) playerAuto.car = c; if (audio?.engine) { /* Klang liest das Auto jedes Bild neu */ } }
@@ -350,6 +366,8 @@ async function main() {
       const sides = [];
       if (car1) sides.push([car1, o2, h2, c2]);
       if (car2) sides.push([car2, o1, h1, c1]);
+      // Rammbock: vor dem Verrechnen merken, wer ihn aktiv hatte
+      const ram1 = car1?.ramT > 0, ram2 = car2?.ramT > 0;
       for (const [car, other, oh, oc] of sides) {
         if (car.remote) continue; // Schaden meldet der Besitzer
         const key = car.uid * 100000 + oh;
@@ -369,11 +387,14 @@ async function main() {
           const om = type === 'car' ? other.car.p.mass : other.body.mass();
           eff = impactSpeed * clamp(om / car.p.mass, 0.6, 1.8);
           if (type === 'car' && other.car.armorT > 0) eff *= 1.7;
+          if (type === 'car' && (other.car === car1 ? ram1 : ram2)) { eff *= 3; game.fx.sparks.burst(point, 40, { speed: 10, spread: 1, life: 0.6, color: 0xff7a2a }); }
         } else if (type === 'prop' || type === 'debris') {
           const b = oc.parent(), om = b ? b.mass() : 50;
           if (car === player && impactSpeed > 3.5) audio?.bump(clamp(om / 60, 0.2, 1));
           eff = impactSpeed * Math.min(1, (om / car.p.mass) * 2.5);
         }
+        // eigener Rammbock ist nach dem ersten echten Treffer verbraucht
+        if (type === 'car' && car.ramT > 0 && impactSpeed > 4) { car.ramT = 0; if (car === player) { audio?.sfx('ramhit'); toast('Rammbock!', 'gold'); } }
         if (eff > 2.4) {
           const s = car.applyImpact(point, tdir, eff);
           cooldown.set(key, now);
@@ -461,6 +482,12 @@ async function main() {
     if (e.repeat) return;
     keys.add(e.code);
     const sc = state.screen;
+    if (sc === 'tuning') {
+      if (e.code === 'Escape' || e.code === 'Enter') closeTuning();
+      const k = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5'].indexOf(e.code);
+      if (k >= 0) { tuneUi.cat = TCATS[k].id; tuneUi.userYaw = 0; renderTune(); }
+      return;
+    }
     if (sc === 'garage') {
       if (e.code === 'ArrowLeft' || e.code === 'KeyA') switchCar(-1);
       if (e.code === 'ArrowRight' || e.code === 'KeyD') switchCar(1);
@@ -482,7 +509,7 @@ async function main() {
       case 'KeyC': state.cam = (state.cam + 1) % 3; break;
       case 'KeyN': if (state.mode === 'arena') resetArena(); break;
       case 'KeyT': if (state.mode === 'lab' || state.mode === 'free' || state.mode === 'arena') setSlowmo(state.timeScale === 1); break;
-      case 'KeyH': cfg.keys = cfg.keys ? 0 : 1; persist(); applyHudPrefs(); break;
+      case 'KeyK': cfg.keys = cfg.keys ? 0 : 1; persist(); applyHudPrefs(); break;
       case 'Space': if (state.mode === 'lab' && !state.labDrive) fireRam(); break;
       case 'Escape': if (state.mode === 'lab') goMenu(); else setPause(true); break;
     }
@@ -524,6 +551,16 @@ async function main() {
     ctl.brake = ramp(ctl.brake, br, 8, 12);
     ctl.steer = analog ? st : ramp(ctl.steer, st, 9, 12);
     ctl.handbrake = hb;
+    setHorn((k('KeyH') || (pad && (pad.buttons[4]?.pressed))) && state.screen === 'hud' && driving() && !!player);
+  }
+  // ---- Hupe
+  function hornKind(car) { return car?.tune?.horn || car?.p?.horn || 'classic'; }
+  function setHorn(on) {
+    if (!!on === !!state.horn) return;
+    state.horn = !!on;
+    const kind = hornKind(player);
+    if (on) audio?.hornStart('me', kind); else audio?.hornStop('me');
+    if (mp.inRace && player?.netId) mp.net?.send('ev', { e: { type: 'horn', id: player.netId, on: !!on, h: kind } });
   }
 
   let drag = null;
@@ -538,11 +575,12 @@ async function main() {
   renderer.domElement.addEventListener('wheel', (e) => { if (state.mode === 'lab') state.orbit.dist = clamp(state.orbit.dist * (e.deltaY > 0 ? 1.1 : 0.9), 4, 30); }, { passive: true });
 
   // ------------------------------------------------------------ Oberfläche: Bildschirme
-  const SCREENS = ['menu', 'sp', 'mp', 'lobby', 'info', 'settings', 'garage', 'hud', 'pause', 'results'];
+  const SCREENS = ['menu', 'sp', 'mp', 'lobby', 'info', 'settings', 'garage', 'tuning', 'hud', 'pause', 'results'];
   function showScreen(name) {
     state.screen = name;
     for (const s of SCREENS) $(s).classList.toggle('on', s === name || (name === 'pause' && s === 'hud') || (name === 'results' && s === 'hud'));
-    const garage = name === 'garage';
+    const garage = name === 'garage' || name === 'tuning';
+    if (name === 'garage') { showCam.clearViewOffset(); showCam.position.set(-1.4, 2.25, 9.8); showCam.lookAt(-1.4, 0.9, 0); }
     renderPass.scene = garage ? show : scene;
     renderPass.camera = garage ? showCam : camera;
     $('labPanel').classList.toggle('hidden', !(state.mode === 'lab' && (name === 'hud' || name === 'pause')));
@@ -638,7 +676,7 @@ async function main() {
   }
 
   // ---- Einzelspieler
-  const sp = Object.assign({ mode: 'race', level: 0, laps: 3, bots: 5, skill: 'normal', items: true }, cfg.sp || {});
+  const sp = Object.assign({ mode: 'race', level: 0, laps: 3, bots: 5, skill: 'normal', items: true, cls: 'open' }, cfg.sp || {});
   function renderSp() {
     const id = LEVEL_ORDER[sp.level], L = LEVELS[id];
     $$('[data-spmode]').forEach((b) => b.classList.toggle('on', b.dataset.spmode === sp.mode));
@@ -651,19 +689,26 @@ async function main() {
     for (const v of $$('.vLaps')) v.textContent = sp.laps;
     $$('#segSkill button, #segSkill2 button').forEach((b) => b.classList.toggle('on', b.dataset.v === sp.skill));
     $$('#segItems button, #segItems2 button').forEach((b) => b.classList.toggle('on', b.dataset.v === (sp.items ? '1' : '0')));
-    const arena = sp.mode === 'arena';
-    $('spOpts').classList.toggle('hidden', sp.mode !== 'race');
-    $('spInfo').classList.toggle('hidden', sp.mode === 'race');
+    const arena = sp.mode === 'arena' || sp.mode === 'derby';
+    const opts = ['race', 'elim', 'derby'].includes(sp.mode);
+    $('spOpts').classList.toggle('hidden', !opts);
+    $('spInfo').classList.toggle('hidden', opts);
+    $('vLaps').closest('.opt').classList.toggle('hidden', sp.mode !== 'race');
+    $$('#segCls button').forEach((b) => b.classList.toggle('on', b.dataset.v === (sp.cls || 'open')));
+    if (sp.mode === 'elim') $('trSub').textContent = 'Ausscheiden: Wer nach jeder Runde des Führenden Letzter ist, fliegt raus. Der Letzte auf der Strecke gewinnt.';
+    if (sp.mode === 'derby') { $('trName').textContent = 'Derby-Arena'; $('trSub').textContent = 'Last Man Standing im Arena-Ring am Grünen Tal: rammen, bis nur noch einer fährt. Totalschaden = raus.'; }
     $('spInfo').innerHTML = sp.mode === 'free'
       ? '<b>Freies Fahren:</b> Allein auf der Strecke, Rundenzeiten jagen, driften und Power-up-Kisten ausprobieren. Mit <kbd>F</kbd> reparierst du jederzeit.'
       : '<b>Crash-Arena:</b> Fünf stehende Autos in der Arena am Grünen Tal warten darauf, zerlegt zu werden. Daneben gibt es eine Sprungschanze. <kbd>N</kbd> stellt alles neu auf.';
     $('trPrev').disabled = $('trNext').disabled = arena;
+    if (sp.mode === 'derby' && sp.level !== 0) { sp.level = 0; return renderSp(); }
     $('trCard').style.opacity = arena ? 0.55 : 1;
     cfg.sp = { ...sp }; persist();
     if (state.screen === 'lobby') mpSendSettings();
   }
   function openSp() { state.menuReturn = 'menu'; renderSp(); renderDriver(); showScreen('sp'); }
-  $$('[data-spmode]').forEach((b) => (b.onclick = () => { sp.mode = b.dataset.spmode; if (sp.mode === 'arena') sp.level = 0; renderSp(); }));
+  $$('[data-spmode]').forEach((b) => (b.onclick = () => { sp.mode = b.dataset.spmode; if (sp.mode === 'arena' || sp.mode === 'derby') sp.level = 0; renderSp(); }));
+  $$('#segCls button').forEach((b) => (b.onclick = () => { sp.cls = b.dataset.v; renderSp(); }));
   $('trPrev').onclick = () => { sp.level = (sp.level + LEVEL_ORDER.length - 1) % LEVEL_ORDER.length; renderSp(); };
   $('trNext').onclick = () => { sp.level = (sp.level + 1) % LEVEL_ORDER.length; renderSp(); };
   $$('[data-step]').forEach((b) => (b.onclick = () => {
@@ -679,7 +724,9 @@ async function main() {
   $('spStart').onclick = () => startFromSp();
   function startFromSp() {
     const id = LEVEL_ORDER[sp.level];
-    if (sp.mode === 'race') startRace({ mode: 'race', level: id, laps: sp.laps, skill: sp.skill, items: sp.items, opponents: sp.bots });
+    if (sp.mode === 'race') startRace({ mode: 'race', level: id, laps: sp.laps, skill: sp.skill, items: sp.items, opponents: sp.bots, cls: sp.cls });
+    else if (sp.mode === 'elim') startRace({ mode: 'race', variant: 'elim', level: id, skill: sp.skill, items: sp.items, opponents: Math.max(1, sp.bots), cls: sp.cls });
+    else if (sp.mode === 'derby') startRace({ mode: 'race', variant: 'derby', level: 'tal', skill: sp.skill, items: sp.items, opponents: Math.max(1, sp.bots), cls: sp.cls });
     else if (sp.mode === 'free') startRace({ mode: 'free', level: id, items: sp.items, opponents: 0 });
     else startArena();
   }
@@ -742,8 +789,9 @@ async function main() {
   $('mpBack').onclick = () => { netLeave(); showScreen('menu'); };
 
   // ---- Lobby (online über den Server, sonst offline mit Bots)
-  const lobby = { code: '', bots: [], level: 0, mode: 'race', fill: false }; // Bots nur, wenn man sie selbst hinzufügt
-  const profile = () => ({ name: cfg.name, car: selId(), color: sel.colors[selId()], sound: sel.sounds[selId()] });
+  const lobby = { code: '', bots: [], level: 0, mode: 'race', fill: false, cls: 'open' }; // Bots nur, wenn man sie selbst hinzufügt
+  const lobbyCls = () => (mp.online && mp.room ? mp.room.settings.cls || 'open' : lobby.cls || 'open');
+  const profile = () => ({ name: cfg.name, car: selId(), color: sel.colors[selId()], sound: sel.sounds[selId()], tune: curTune() });
   async function createRoom() {
     codeMsg('<span class="spin"></span>Raum wird erstellt …', true);
     if (await netConnect()) {
@@ -765,9 +813,15 @@ async function main() {
     const used = new Set(taken.map((b) => b.name));
     const name = pick(BOT_NAMES.filter((n) => !used.has(n))) || 'Bot';
     const car = pick(CAR_ORDER);
-    return { name, car, color: pick(CARS[car].colors) };
+    return { name, car, color: pick(CARS[car].colors), tune: Math.random() < 0.6 ? randomTune(CARS[car], Math.random, lobbyCls()) : normTune(null) };
   }
   const isHost = () => !mp.online || mp.room?.host === mp.me;
+  // Klassen-Plakette (mit Drossel-Hinweis, wenn das Raum-Limit greift)
+  const piTag = (car, t) => {
+    const lim = lobbyCls(), { pi, cls } = perfIndex(car, t), over = lim !== 'open' && pi > classMax(lim);
+    const shown = over ? restrictedPI(car, t, restrictFor(car, t, lim)) : pi, c = over ? classOf(shown) : cls;
+    return `<span class="piTag" style="--cc:${c.color}" title="${over ? 'gedrosselt von ' + pi + ' PI' : 'Leistungsindex'}"><b>${c.id}</b>${shown}${over ? ' ↓' : ''}</span>`;
+  };
   function renderLobby() {
     const online = mp.online && mp.room;
     const R = online ? mp.room : null;
@@ -775,7 +829,7 @@ async function main() {
     if (online) {
       const st = R.settings;
       lobby.level = Math.max(0, LEVEL_ORDER.indexOf(st.level));
-      lobby.mode = st.mode; lobby.fill = st.fill; lobby.code = R.code; lobby.bots = R.bots.map((b) => ({ ...b }));
+      lobby.mode = st.mode; lobby.fill = st.fill; lobby.cls = st.cls || 'open'; lobby.code = R.code; lobby.bots = R.bots.map((b) => ({ ...b }));
       if (!host) { sp.laps = st.laps; sp.skill = st.skill; sp.items = st.items; }
     }
     const L = LEVELS[LEVEL_ORDER[lobby.level]];
@@ -784,17 +838,19 @@ async function main() {
     const n = humans.length + lobby.bots.length;
     $('lbSub').textContent = `${n}/8 Fahrer · ${online ? (host ? 'Freunde treten mit dem Code bei' : 'Der Gastgeber startet das Rennen') : 'Offline – nur mit Bots'}`;
     $('lbTrack').textContent = L.name;
-    $('lbModeTxt').textContent = lobby.mode === 'race' ? 'RENNEN' : 'FREIES FAHREN';
+    $('lbModeTxt').textContent = { race: 'RENNEN', elim: 'AUSSCHEIDEN', derby: 'DERBY', free: 'FREIES FAHREN' }[lobby.mode] || 'RENNEN';
+    if (lobby.mode === 'derby') $('lbTrack').textContent = 'Derby-Arena';
+    $$('#segCls2 button').forEach((b) => b.classList.toggle('on', b.dataset.v === (lobby.cls || 'open')));
     const hostId = online ? R.host : 'me';
     let html = '';
     for (const p of humans) {
       const mine = online ? p.id === mp.me : true;
       const car = CARS[p.car] || CARS.brutus;
-      html += `<div class="slot ${mine ? 'mine' : ''}" ${mine ? 'data-me="1" title="Auto ändern"' : ''}><div class="avatar" style="color:${p.color}">${UI_ICONS.car}</div><div class="nm">${escapeHtml(p.name)}${mine && online ? ' (du)' : ''}</div><div class="cr">${car.name}</div>${p.id === hostId ? `<div class="host"><i>${UI_ICONS.crown}</i>Gastgeber</div>` : '<div class="bot">Spieler</div>'}</div>`;
+      html += `<div class="slot ${mine ? 'mine' : ''}" ${mine ? 'data-me="1" title="Auto ändern"' : ''}><div class="avatar" style="color:${p.color}">${UI_ICONS.car}</div><div class="nm">${escapeHtml(p.name)}${mine && online ? ' (du)' : ''}</div><div class="cr">${car.name} ${piTag(car, p.tune)}</div>${p.id === hostId ? `<div class="host"><i>${UI_ICONS.crown}</i>Gastgeber</div>` : '<div class="bot">Spieler</div>'}</div>`;
     }
     const skillTxt = sp.skill[0].toUpperCase() + sp.skill.slice(1);
     lobby.bots.forEach((b, k) => {
-      html += `<div class="slot">${host ? `<button class="x" data-rm="${k}">✕</button>` : ''}<div class="avatar" style="color:${b.color}">${UI_ICONS.robot}</div><div class="nm">${escapeHtml(b.name)}</div><div class="cr">${(CARS[b.car] || CARS.brutus).name}</div><div class="bot">Bot · ${skillTxt}</div></div>`;
+      html += `<div class="slot">${host ? `<button class="x" data-rm="${k}">✕</button>` : ''}<div class="avatar" style="color:${b.color}">${UI_ICONS.robot}</div><div class="nm">${escapeHtml(b.name)}</div><div class="cr">${(CARS[b.car] || CARS.brutus).name} ${piTag(CARS[b.car] || CARS.brutus, b.tune)}</div><div class="bot">Bot · ${skillTxt}</div></div>`;
     });
     for (let k = n; k < 8; k++) html += `<div class="slot empty" ${host ? 'data-add="1"' : ''}><div class="plus">${UI_ICONS.plus}</div><div>Freund einladen${host ? '<br><small>oder Bot hinzufügen</small>' : ''}</div></div>`;
     $('slots').innerHTML = html;
@@ -804,7 +860,9 @@ async function main() {
     $$('[data-me]').forEach((b) => (b.onclick = () => openGarage('lobby')));
     $$('#segFill button').forEach((b) => b.classList.toggle('on', b.dataset.v === (lobby.fill ? '1' : '0')));
     const nb = lobby.bots.length;
-    $('lbHint').textContent = lobby.mode !== 'race' ? 'Freies Fahren – ohne Bots. Drücke START!'
+    $('lbHint').textContent = lobby.mode === 'free' ? 'Freies Fahren – ohne Bots. Drücke START!'
+      : lobby.mode === 'derby' && nb + (online ? R.players.length : 1) < 2 ? 'Derby: Last Man Standing in der Arena – füg Bots hinzu oder warte auf Freunde!'
+      : lobby.mode === 'elim' && nb + (online ? R.players.length : 1) < 2 ? 'Ausscheiden: Nach jeder Runde fliegt der Letzte raus – mindestens 2 Fahrer nötig!'
       : lobby.fill ? 'Freie Plätze werden beim Start mit Bots aufgefüllt (ändern unter ANPASSEN)'
       : nb ? `${nb} Bot${nb > 1 ? 's' : ''} fahren mit · Tippe auf ✕, um einen zu entfernen`
       : host ? 'Keine Bots – nur echte Fahrer. Tippe auf ein leeres Feld für einen Bot.' : 'Keine Bots – nur echte Fahrer';
@@ -816,14 +874,15 @@ async function main() {
   // Einstellungen des Gastgebers an den Server (nur wenn sich etwas ändert)
   function mpSendSettings() {
     if (!mp.online || !mp.room || !isHost()) return;
-    const want = { level: LEVEL_ORDER[lobby.level], laps: sp.laps, items: sp.items, skill: sp.skill, mode: lobby.mode, fill: lobby.fill };
+    const want = { level: LEVEL_ORDER[lobby.level], laps: sp.laps, items: sp.items, skill: sp.skill, mode: lobby.mode, fill: lobby.fill, cls: lobby.cls || 'open' };
     const cur = mp.room.settings;
     if (Object.keys(want).some((k) => want[k] !== cur[k])) mp.net.send('settings', want);
   }
   const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   $('lbPrev').onclick = () => { lobby.level = (lobby.level + LEVEL_ORDER.length - 1) % LEVEL_ORDER.length; mpSendSettings(); renderLobby(); };
   $('lbNext').onclick = () => { lobby.level = (lobby.level + 1) % LEVEL_ORDER.length; mpSendSettings(); renderLobby(); };
-  $('lbMode').onclick = () => { lobby.mode = lobby.mode === 'race' ? 'free' : 'race'; mpSendSettings(); renderLobby(); };
+  $('lbMode').onclick = () => { const M = ['race', 'elim', 'derby', 'free']; lobby.mode = M[(M.indexOf(lobby.mode) + 1) % M.length]; mpSendSettings(); renderLobby(); };
+  $$('#segCls2 button').forEach((b) => (b.onclick = () => { lobby.cls = b.dataset.v; mpSendSettings(); renderLobby(); }));
   $('lbCustom').onclick = () => $('lbSettings').classList.toggle('hidden');
   $('lbSetOk').onclick = () => $('lbSettings').classList.add('hidden');
   $$('#segFill button').forEach((b) => (b.onclick = () => { lobby.fill = b.dataset.v === '1'; mpSendSettings(); renderLobby(); }));
@@ -841,10 +900,12 @@ async function main() {
     if (!isHost()) return;
     const list = [...lobby.bots];
     const humans = mp.online && mp.room ? mp.room.players.length : 1;
-    if (lobby.mode === 'race' && lobby.fill) while (list.length + humans < 8) list.push(newBot(list));
+    if (lobby.mode !== 'free' && lobby.fill) while (list.length + humans < 8) list.push(newBot(list));
+    if ((lobby.mode === 'elim' || lobby.mode === 'derby') && list.length + humans < 2) list.push(newBot(list));
     if (mp.online) { mp.net.send('start', { bots: list }); return; }
     lobby.bots = list;
-    startRace({ mode: lobby.mode, level: LEVEL_ORDER[lobby.level], laps: sp.laps, skill: sp.skill, items: sp.items, opponents: lobby.mode === 'race' ? list.length : 0, roster: list, fromLobby: true });
+    const variant = lobby.mode === 'elim' || lobby.mode === 'derby' ? lobby.mode : 'race';
+    startRace({ mode: lobby.mode === 'free' ? 'free' : 'race', variant, level: variant === 'derby' ? 'tal' : LEVEL_ORDER[lobby.level], laps: sp.laps, skill: sp.skill, items: sp.items, opponents: lobby.mode !== 'free' ? list.length : 0, roster: list, fromLobby: true, cls: lobby.cls });
   };
 
   // ---- Info-Panels
@@ -869,15 +930,15 @@ async function main() {
         <span><kbd>Leertaste</kbd></span><span>Handbremse antippen = Drift starten · Gas halten = Drift halten</span>
         <span>Im Drift</span><span>In die Kurve lenken = mehr Winkel · gegenlenken oder Gas weg = wieder greifen</span>
         <span>Schwung-Wechsel</span><span>Im Drift in die andere Richtung lenken und Handbremse antippen</span>
-        <span>Power-Slide</span><span>Brutus &amp; Kaze: Vollgas + voll einlenken in schnellen Kurven</span>
         <span>Mini-Turbo</span><span>Lange sauber driften: Funken blau → orange → lila. Beim Rausgehen gibt's Schub!</span>
         <span><kbd>E</kbd> oder <kbd>Shift</kbd></span><span>Power-up einsetzen</span>
         <span><kbd>R</kbd></span><span>Zurück auf die Strecke</span>
         <span><kbd>F</kbd></span><span>Reparieren (nicht im Rennen)</span>
         <span><kbd>C</kbd></span><span>Kamera: nah, weit, Cockpit</span>
         <span><kbd>Esc</kbd></span><span>Pause</span>
-        <span><kbd>M</kbd> · <kbd>H</kbd></span><span>Ton an/aus · Tasten-Hinweise</span>
-        <span>Gamepad</span><span>RT Gas, LT Bremse, Stick lenken, A Handbremse, X/RB Power-up, Y Zurücksetzen, B Kamera, Start Pause</span>
+        <span><kbd>H</kbd></span><span>Hupe (Gamepad: LB) – im Mehrspieler hören es alle</span>
+        <span><kbd>M</kbd> · <kbd>K</kbd></span><span>Ton an/aus · Tasten-Hinweise</span>
+        <span>Gamepad</span><span>RT Gas, LT Bremse, Stick lenken, A Handbremse, X/RB Power-up, LB Hupe, Y Zurücksetzen, B Kamera, Start Pause</span>
         <span>Start</span><span>Bei Grün mit halbem Gas (Drehzahl in der Mitte) gibt es einen Turbo-Start!</span>
       </div>`;
     }
@@ -913,8 +974,10 @@ async function main() {
     $('carName').textContent = c.name;
     $('carTag').textContent = c.tag;
     $('carIdx').textContent = `${sel.idx + 1} / ${CAR_ORDER.length}`;
-    const bars = [['Topspeed', c.stats.speed], ['Beschleunigung', c.stats.accel], ['Handling', c.stats.handling], ['Panzerung', c.stats.armor]];
-    $('carStats').innerHTML = bars.map(([l, v]) => `<div class="stat"><span>${l}</span><i><b style="width:${Math.round(v * 100)}%"></b></i></div>`).join('');
+    const t = curTune(), pi = perfIndex(c, t), st = pi.stats;
+    const bars = [['Topspeed', st.speed, c.stats.speed], ['Beschleunigung', st.accel, c.stats.accel], ['Handling', st.handling, c.stats.handling], ['Panzerung', st.armor, c.stats.armor]];
+    $('carStats').innerHTML = bars.map(([l, v, v0]) => `<div class="stat"><span>${l}</span><i><b class="${v > v0 + 0.004 ? 'up' : ''}" style="width:${Math.round(clamp(v, 0, 1) * 100)}%"></b></i></div>`).join('');
+    $('carClass').innerHTML = `<span class="clsBadge" style="--cc:${pi.cls.color}"><b>${pi.cls.id}</b>${pi.pi} PI</span>${isStock(t) ? '' : '<span class="tunedTag">● Getunt</span>'}`;
     const sw = $('colors');
     sw.innerHTML = '';
     for (const col of c.colors) {
@@ -963,8 +1026,211 @@ async function main() {
   showModel = makeShowModel(selId(), sel.colors[selId()]);
   turntable.add(showModel);
 
+  // ---- Werkstatt (Tuning)
+  const TCATS = [
+    { id: 'aero', label: 'Aero', icon: 'wing' },
+    { id: 'engine', label: 'Motor', icon: 'engine' },
+    { id: 'tires', label: 'Reifen', icon: 'tire' },
+    { id: 'armor', label: 'Panzer', icon: 'shield' },
+    { id: 'horn', label: 'Hupe', icon: 'horn' },
+  ];
+  const TCAT_SUB = { aero: 'Flügel und Splitter: mehr Grip in schnellen Kurven', engine: 'Mehr Drehmoment, mehr Drehzahl, mehr Krach', tires: 'Eine Mischung für jeden Untergrund', armor: 'Mehr aushalten, mehr austeilen – dafür schwerer', horn: 'Damit dich jeder kommen hört' };
+  const LV_TXT = ['S', 'I', 'II', 'III'];
+  const tuneUi = { cat: 'aero', from: 'garage', yaw: 0, yawT: 0, drag: null, userYaw: 0, look: new THREE.Vector3(0, 0.8, 0), bounce: 0, bounceV: 0, lid: 0 };
+  const showTarget = { pos: new THREE.Vector3(-1.4, 2.25, 9.8), look: new THREE.Vector3(-1.4, 0.9, 0) };
+  // Wirkung eines einzelnen Teils als Chips (für die Karten)
+  function partChips(cat, v, id) {
+    const p = CARS[id];
+    if (cat === 'aero') return [[['', '+35 % Abtrieb', '+80 % Abtrieb', '+140 % Abtrieb'][v], 'g'], [['', '+5 % Kurvengrip', '+10 % Kurvengrip', '+16 % Kurvengrip'][v], 'g'], [['', '−0,5 % Topspeed', '−1,5 % Topspeed', '−3 % Topspeed'][v], 'r']].filter((c) => c[0]);
+    if (cat === 'engine') return [[['', '+8 % Drehmoment', '+16 % Drehmoment', '+25 % Drehmoment'][v], 'g'], [['', '', '+2,5 % Drehzahl', '+4,5 % Drehzahl'][v], 'g'], [['', 'Sound +8 %', 'Sound +18 %', 'Sound +30 %'][v], 'b']].filter((c) => c[0]);
+    if (cat === 'armor') return [[['', '+30 % Haltbarkeit', '+60 % Haltbarkeit', '+90 % Haltbarkeit'][v], 'g'], [['', `+${Math.round(p.mass * 0.04)} kg`, `+${Math.round(p.mass * 0.08)} kg`, `+${Math.round(p.mass * 0.13)} kg`][v], 'r']].filter((c) => c[0]);
+    if (cat === 'tires') return ({ street: [['Ausgewogen', 'b']], grip: [['+8 % Grip Asphalt', 'g'], ['−10 % Grip Gelände', 'r']], drift: [['Drift halten +25 %', 'g'], ['Mini-Turbo +35 %', 'g'], ['−2 % Grip', 'r']], offroad: [['+32 % Grip Gelände', 'g'], ['−38 % Rollwiderstand Gelände', 'g'], ['−5 % Grip Asphalt', 'r']] })[v] || [];
+    return [];
+  }
+  function tuneSummary(t, id) {
+    const out = [];
+    if (t.aero) out.push([PARTS.aero.levels[t.aero].name, 'b']);
+    if (t.engine) out.push([PARTS.engine.levels[t.engine].name.replace(/ · .*/, ''), 'b'], [`+${[0, 8, 16, 25][t.engine]} % Drehmoment`, 'g']);
+    if (t.tires !== 'street') out.push([`Reifen: ${PARTS.tires.options.find((o) => o.id === t.tires).name}`, 'b']);
+    if (t.armor) out.push([`Panzer ${LV_TXT[t.armor]}`, 'b'], [`+${Math.round(CARS[id].mass * [0, 0.04, 0.08, 0.13][t.armor])} kg`, 'r']);
+    if (t.horn) out.push([`Hupe: ${HORNS[t.horn]?.label || t.horn}`, 'b']);
+    return out.length ? out : [['Alles Serie', '']];
+  }
+  function renderTuneCats() {
+    const t = curTune();
+    $('tCats').innerHTML = TCATS.map((c) => {
+      const v = c.id === 'tires' ? (t.tires === 'street' ? 0 : 3) : c.id === 'horn' ? (t.horn ? 3 : 0) : t[c.id];
+      const pips = c.id === 'tires' || c.id === 'horn' ? `<i class="${v ? 'on' : ''}" style="width:30px"></i>` : [1, 2, 3].map((k) => `<i class="${k <= v ? 'on' : ''}"></i>`).join('');
+      return `<button class="tCat ${tuneUi.cat === c.id ? 'on' : ''}" data-tc="${c.id}"><span class="ic">${UI_ICONS[c.icon]}</span><small>${c.label}</small><span class="pips">${pips}</span></button>`;
+    }).join('');
+    $$('#tCats [data-tc]').forEach((b) => (b.onclick = () => { tuneUi.cat = b.dataset.tc; tuneUi.userYaw = 0; audio?.sfx('tick'); renderTune(); }));
+  }
+  function renderTuneList() {
+    const id = selId(), t = curTune(), cat = tuneUi.cat;
+    const C = TCATS.find((c) => c.id === cat);
+    $('tCatIc').innerHTML = UI_ICONS[C.icon];
+    $('tCatName').textContent = cat === 'horn' ? 'Hupe' : PARTS[cat].label;
+    $('tCatSub').textContent = TCAT_SUB[cat];
+    let cards = [];
+    if (cat === 'tires') cards = PARTS.tires.options.map((o, k) => ({ v: o.id, on: t.tires === o.id, lv: k, name: o.name, desc: o.desc, chips: partChips('tires', o.id, id), icon: 'tire' }));
+    else if (cat === 'horn') {
+      const def = CARS[id].horn;
+      const HD = { classic: 'Zweiklang wie früher – laut und ehrlich', high: 'Hell und frech, wie aus Tokio', sport: 'Dreiklang-Fanfare für den großen Auftritt', truck: 'Tiefe Druckluft-Hörner vom Sattelschlepper', train: 'Mächtiges Signalhorn – alle springen zur Seite', cucaracha: 'Spielt La Cucaracha' };
+      cards = Object.entries(HORNS).map(([hid, H], k) => ({ v: hid, on: (t.horn || def) === hid, lv: (k % 3) + 1, name: H.label + (hid === def ? ' · Serie' : ''), desc: HD[hid] || 'Fanfare', chips: [], icon: 'horn', play: true }));
+    } else cards = PARTS[cat].levels.map((L, k) => ({ v: k, on: t[cat] === k, lv: k, name: L.name, desc: L.desc, chips: partChips(cat, k, id) }));
+    $('tList').innerHTML = cards.map((c, i) => `<button class="tCard ${c.on ? 'on' : ''}" data-tv="${c.v}"><div class="lv l${c.lv}">${c.icon ? UI_ICONS[c.icon] : LV_TXT[c.lv]}</div><div class="nm">${c.name}</div><div class="ds">${c.desc}</div>${c.chips.length ? `<div class="fx">${c.chips.map(([tx, cl]) => `<span class="chip ${cl}">${tx}</span>`).join('')}</div>` : ''}${c.play ? `<span class="btn blue play" data-play="${c.v}"><span class="ic">${UI_ICONS.play || ''}</span></span>` : ''}</button>`).join('');
+    $$('#tList [data-tv]').forEach((b) => (b.onclick = (e) => {
+      if (e.target.closest('[data-play]')) { playHornPreview(e.target.closest('[data-play]').dataset.play); return; }
+      const raw = b.dataset.tv, v = cat === 'tires' || cat === 'horn' ? raw : Number(raw);
+      setTunePart(cat, v);
+      if (cat === 'horn') playHornPreview(raw);
+    }));
+  }
+  function renderTuneStats() {
+    const id = selId(), t = curTune(), base = perfIndex(CARS[id], {}), cur = perfIndex(CARS[id], t);
+    $('tCls').textContent = cur.cls.id;
+    $('tPI').querySelector('.big').style.setProperty('--cc', cur.cls.color);
+    $('tPiNum').innerHTML = `${cur.pi}<small>PI</small>`;
+    const d = cur.pi - base.pi;
+    $('tPiDelta').innerHTML = d ? `Serie ${base.pi} · <span class="${d > 0 ? 'g' : 'r'}">${d > 0 ? '+' : ''}${d}</span>` : 'Serienzustand';
+    // Skala D..X
+    const lo = 200, hi = 950, x = (pi) => ((clamp(pi, lo, hi) - lo) / (hi - lo)) * 100;
+    let html = CLASSES.map((c, k) => { const a = Math.max(lo, c.min), b = k + 1 < CLASSES.length ? CLASSES[k + 1].min : hi; return `<div class="seg" style="left:${x(a)}%;width:${x(b) - x(a)}%;background:${c.color}">${c.id}</div>`; }).join('');
+    const lim = state.screen === 'tuning' && tuneUi.from === 'lobby' ? lobbyCls() : 'open';
+    if (lim !== 'open') html += `<div class="lim" style="left:${x(classMax(lim) + 1)}%"></div>`;
+    html += `<div class="mk base" style="left:${x(base.pi)}%"></div><div class="mk" style="left:${x(cur.pi)}%"></div>`;
+    $('tScale').innerHTML = html;
+    if (lim !== 'open' && cur.pi > classMax(lim)) {
+      const f = restrictFor(CARS[id], t, lim);
+      $('tLimit').textContent = `Raum-Limit ${lim}: wird auf ${restrictedPI(CARS[id], t, f)} PI gedrosselt`;
+    } else $('tLimit').textContent = '';
+    const rows = [['Topspeed', 'speed'], ['Beschleunigung', 'accel'], ['Handling', 'handling'], ['Panzerung', 'armor'], ['Gelände', 'offroad']];
+    $('tBars').innerHTML = rows.map(([label, k]) => {
+      const b0 = clamp(base.stats[k], 0, 1), b1 = clamp(cur.stats[k], 0, 1), dv = cur.stats[k] - base.stats[k];
+      const lo2 = Math.min(b0, b1), w = Math.abs(b1 - b0);
+      const pct = Math.abs(dv) < 0.004 ? '' : `${dv > 0 ? '+' : '−'}${Math.round(Math.abs(dv) * 100)}`;
+      return `<div class="tb"><span>${label}</span><i><b style="width:${lo2 * 100}%"></b><u class="${dv >= 0 ? 'g' : 'r'}" style="left:${lo2 * 100}%;width:${w * 100}%"></u></i><em class="${dv >= 0 ? 'g' : 'r'}">${pct}</em></div>`;
+    }).join('');
+    $('tSum').innerHTML = tuneSummary(t, id).map(([tx, cl]) => `<span class="chip ${cl}">${tx}</span>`).join('');
+  }
+  function renderTune() {
+    $('tCarName').textContent = CARS[selId()].name;
+    renderTuneCats(); renderTuneList(); renderTuneStats();
+    tuneFocus();
+  }
+  function setTunePart(cat, v) {
+    const id = selId(), t = curTune();
+    if (cat === 'horn') t.horn = v === CARS[id].horn ? '' : v; else t[cat] = v;
+    const changed = JSON.stringify(t) !== JSON.stringify(curTune());
+    sel.tunes[id] = t;
+    saveCar();
+    if (changed && cat !== 'horn') {
+      rebuildShowModel();
+      audio?.sfx(cat === 'engine' ? 'clank' : 'pickup');
+      tuneUi.bounce = 0.16; tuneUi.bounceV = 0;
+      const nm = cat === 'tires' ? PARTS.tires.options.find((o) => o.id === v).name + '-Reifen' : PARTS[cat].levels[v].name;
+      const el = $('tFlash'); el.textContent = v === 0 || v === 'street' ? 'Serie' : nm.replace(/^Stufe \d · /, '') + ' eingebaut!';
+      el.classList.remove('go'); void el.offsetWidth; el.classList.add('go');
+    }
+    renderTune();
+  }
+  function playHornPreview(kind) {
+    ensureAudio(false).then(() => {
+      if (!audio) return;
+      audio.hornStop('preview');
+      audio.hornStart('preview', kind, 0.9);
+      clearTimeout(tuneUi.hornT);
+      tuneUi.hornT = setTimeout(() => audio?.hornStop('preview'), HORNS[kind]?.melody ? 2400 : 900);
+    });
+  }
+  function rebuildShowModel() {
+    const old = showModel;
+    showModel = makeShowModel(selId(), sel.colors[selId()]);
+    turntable.add(showModel);
+    if (old) { turntable.remove(old); disposeShow(old); }
+    tuneUi.lid = 0;
+  }
+  function disposeShow(g) { g.traverse((o) => { if (o.isMesh) { o.geometry?.dispose(); } }); }
+  // Kamera und Drehteller je Kategorie
+  function tuneFocus() {
+    const cat = tuneUi.cat, p = CARS[selId()], L = p.dims.l, Ht = p.dims.h + p.dims.cabinH, k = Math.pow(L / 4.6, 0.8) * (1 + Math.max(0, Ht - 1.1) * 0.32), ly = 0.55 + Ht * 0.3;
+    const mid = showModel?.userData.model.enginePoint;
+    const engineRear = mid && mid.z > 0.3;
+    const views = {
+      aero: { yaw: -0.68, pos: [0, 3.3 + Ht * 0.9, 10.6 * k], look: [0, ly + 0.15, 0] },
+      engine: { yaw: engineRear ? -0.35 : Math.PI + 0.45, pos: [0, 3.9 + Ht * 0.5, 8.8 * k], look: [0, ly - 0.05, 0] },
+      tires: { yaw: -Math.PI / 2 + 0.38, pos: null, look: null },
+      armor: { yaw: Math.PI + 0.95, pos: [0, 2.2 + Ht * 0.45, 10.8 * k], look: [0, ly, 0] },
+      horn: { yaw: Math.PI + 0.3, pos: [0, 1.6 + Ht * 0.4, 10.0 * k], look: [0, ly, 0] },
+    };
+    const v = views[cat];
+    tuneUi.yawT = v.yaw;
+    if (v.pos) { showTarget.pos.set(...v.pos); showTarget.look.set(...v.look); }
+  }
+  function openTuning(from = 'garage') {
+    tuneUi.from = from;
+    tuneUi.userYaw = 0;
+    tuneUi.yaw = turntable.rotation.y;
+    if (slide) { if (outgoing) turntable.remove(outgoing); outgoing = null; showModel.position.set(0, 0, 0); slide = null; }
+    showScreen('tuning');
+    renderTune();
+  }
+  function closeTuning() {
+    audio?.hornStop('preview');
+    showCam.clearViewOffset();
+    showScreen('garage');
+    renderCarInfo();
+    tuneUi.lid = 0;
+    const m = showModel?.userData.model;
+    for (const part of m?.parts || []) if (part.id === 'hood' || part.id === 'trunk') part.pivot.rotation.x = 0;
+  }
+  $('gTune').onclick = () => openTuning(garageFrom === 'lobby' ? 'lobby' : 'garage');
+  $('tBack').onclick = closeTuning;
+  $('tDone').onclick = closeTuning;
+  $('tReset').onclick = () => { sel.tunes[selId()] = normTune(null); saveCar(); rebuildShowModel(); audio?.sfx('tick'); renderTune(); };
+  // Ziehen dreht das Auto
+  renderer.domElement.addEventListener('pointerdown', (e) => { if (state.screen === 'tuning' || state.screen === 'garage') tuneUi.drag = { x: e.clientX }; });
+  window.addEventListener('pointermove', (e) => { if (!tuneUi.drag) return; tuneUi.userYaw += (e.clientX - tuneUi.drag.x) * 0.008; if (state.screen === 'garage') turntable.rotation.y += (e.clientX - tuneUi.drag.x) * 0.008; tuneUi.drag.x = e.clientX; });
+  window.addEventListener('pointerup', () => { tuneUi.drag = null; });
+  // je Bild: weich zur Zielansicht, Haube auf beim Motor, Wippen nach dem Einbau
+  function updateTuning(dt) {
+    const m = showModel?.userData.model;
+    if (!m) return;
+    const W = renderer.domElement.clientWidth, H = renderer.domElement.clientHeight;
+    showCam.setViewOffset(W, H, -0.07 * W, 0.02 * H, W, H);
+    const a = 1 - Math.exp(-dt * 3.2);
+    let tgt = tuneUi.yawT + tuneUi.userYaw;
+    let dy = tgt - turntable.rotation.y;
+    dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+    turntable.rotation.y += dy * a;
+    if (tuneUi.cat === 'tires') {
+      // Kamera am rechten Vorderrad
+      const wh = m.wheels.find((w) => w.id === 'FR') || m.wheels[0];
+      const wp = wh.pivot.getWorldPosition(new THREE.Vector3());
+      const right = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), turntable.rotation.y);
+      const fwd = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), turntable.rotation.y);
+      const wr = CARS[selId()].wheel.r / 0.35;
+      showTarget.look.copy(wp).addScaledVector(fwd, 0.35 * wr).add(new THREE.Vector3(0, 0.12 * wr, 0));
+      showTarget.pos.copy(wp).addScaledVector(right, 3.7 * wr).addScaledVector(fwd, 1.25 * wr).add(new THREE.Vector3(0, 0.9 * wr, 0));
+    }
+    showCam.position.lerp(showTarget.pos, a);
+    tuneUi.look.lerp(showTarget.look, a);
+    showCam.lookAt(tuneUi.look);
+    // Motorhaube bzw. Motordeckel öffnen
+    const lidOpen = tuneUi.cat === 'engine' ? 1 : 0;
+    tuneUi.lid += (lidOpen - tuneUi.lid) * Math.min(1, dt * 4);
+    const ep = m.enginePoint, rear = ep && ep.z > 0.3;
+    const lid = m.parts.find((p) => p.id === (rear ? 'trunk' : 'hood'));
+    if (lid) lid.pivot.rotation.x = (rear ? -1 : 1) * 1.05 * easeInOut(tuneUi.lid);
+    // Wippen
+    tuneUi.bounceV += (-tuneUi.bounce * 260 - tuneUi.bounceV * 14) * dt;
+    tuneUi.bounce += tuneUi.bounceV * dt;
+    showModel.position.y = Math.max(-0.05, tuneUi.bounce);
+  }
+
   // ---- Pause + Ergebnis
   function setPause(on) {
+    if (state.horn) setHorn(false);
     if (on && state.screen !== 'hud') return;
     state.paused = on && !mp.inRace;
     showScreen(on ? 'pause' : 'hud');
@@ -1026,7 +1292,7 @@ async function main() {
 
   function spawnPlayerAt(pos, yaw) {
     disposeCar(player);
-    player = makeCar(selId(), sel.colors[selId()], { isPlayer: true, name: cfg.name });
+    player = makeCar(selId(), sel.colors[selId()], { isPlayer: true, name: cfg.name, tune: curTune(), restrict: myRestrict() });
     placeCar(player, pos, yaw);
     if (audio) { audio.disposeEngine?.(); attachSound(true); }
     damageView.lastBody = 100;
@@ -1034,6 +1300,7 @@ async function main() {
 
   async function startRace(opt) {
     state.lastRace = opt;
+    state.classLimit = opt.cls || 'open';
     clearTimeout(resT);
     showScreen('hud');
     $('hud').classList.add('hidden');
@@ -1044,11 +1311,13 @@ async function main() {
     removeRam();
     while (game.debris.length) removeDebris(game.debris.shift());
     items?.dispose();
-    items = new Items(game, game.track, { enabled: opt.items !== false });
+    const derby = opt.variant === 'derby', A = game.track.extras.arena;
+    items = new Items(game, game.track, { enabled: opt.items !== false, arena: derby ? A : null });
     props.reset();
     game.fx.skids.clear();
     const tr = game.track;
-    race = new Race(tr, { laps: opt.laps || 3, mode: opt.mode });
+    race = new Race(tr, { laps: opt.laps || 3, mode: opt.mode, variant: opt.variant || 'race' });
+    state.variant = opt.variant || 'race'; state.spectate = null; game.derby = derby;
     const n = opt.opponents || 0;
     const roster = opt.roster ? opt.roster.slice(0, n) : [];
     const usedNames = new Set(roster.map((r) => r.name));
@@ -1059,17 +1328,19 @@ async function main() {
       roster.push({ name, car, color: pick(CARS[car].colors) });
     }
     roster.forEach((r, k) => {
-      const c = makeCar(r.car, r.color, { ai: true, name: r.name });
-      const s = gridSlot(tr, k);
+      const bt = r.tune || randomTune(CARS[r.car], Math.random, opt.cls || 'open');
+      const c = makeCar(r.car, r.color, { ai: true, name: r.name, tune: bt, restrict: restrictFor(CARS[r.car], bt, opt.cls || 'open') });
+      const s = derby ? derbySlot(k, n + 1) : gridSlot(tr, k);
       placeCar(c, s.pos, s.yaw);
-      const driver = new BotDriver(c, tr, opt.skill || 'normal', Math.random());
+      const driver = derby ? new DerbyDriver(c, A, opt.skill || 'normal', Math.random()) : new BotDriver(c, tr, opt.skill || 'normal', Math.random());
       bots.push({ car: c, driver, name: r.name });
       race.add(c, { name: r.name, bot: driver, color: r.color });
     });
-    const ps = gridSlot(tr, n);
+    const ps = derby ? derbySlot(n, n + 1) : gridSlot(tr, n);
     spawnPlayerAt(ps.pos, ps.yaw);
     race.add(player, { name: cfg.name, isPlayer: true, color: sel.colors[selId()] });
     setMode(opt.mode);
+    if (player.restrict < 1) toast(`Klasse ${opt.cls}: dein Auto ist auf ${restrictedPI(CARS[selId()], curTune(), player.restrict)} PI gedrosselt`, 'bad');
     $('itemSlot').classList.toggle('hidden', !items.enabled);
     lap.start = 0; lap.best = null; lap.last = null; lap.count = 1;
     if (opt.mode === 'race') {
@@ -1157,6 +1428,7 @@ async function main() {
 
   // ---- Hauptmenü mit Bot-Rennen im Hintergrund
   async function goMenu() {
+    if (state.horn) setHorn(false);
     clearTimeout(resT);
     if (mp.online) netLeave();
     mp.inRace = false;
@@ -1177,8 +1449,8 @@ async function main() {
     const tr = game.track;
     race = new Race(tr, { laps: 99, mode: 'free' });
     for (let k = 0; k < 6; k++) {
-      const id = CAR_ORDER[k % 3];
-      const c = makeCar(id, pick(CARS[id].colors), { ai: true, name: BOT_NAMES[k] });
+      const id = CAR_ORDER[k % CAR_ORDER.length];
+      const c = makeCar(id, pick(CARS[id].colors), { ai: true, name: BOT_NAMES[k], tune: Math.random() < 0.5 ? randomTune(CARS[id]) : null });
       const s = gridSlot(tr, k);
       placeCar(c, s.pos, s.yaw);
       const driver = new BotDriver(c, tr, k % 2 ? 'profi' : 'normal', Math.random());
@@ -1198,12 +1470,13 @@ async function main() {
     if (player.itemRoll > 0) return;
     const e = race?.entryOf(player);
     const ahead = e && race.sorted ? race.sorted.find((o) => o.place === e.place - 1)?.car : null;
-    items.use(player, ahead || null);
+    const aheadAll = e && race.sorted ? race.sorted.filter((o) => o.place < e.place).map((o) => o.car) : [];
+    items.use(player, ahead || null, aheadAll);
   }
   function resetPlayer() {
     if (!player) return;
     if (state.mode === 'lab' && !state.labDrive) { spawnLabCar(); toast('Auto zurückgesetzt'); return; }
-    if ((state.mode === 'race' || state.mode === 'free') && race) {
+    if ((state.mode === 'race' || state.mode === 'free') && race && race.variant !== 'derby') {
       if (race.phase === 'countdown') return;
       const e = race.entryOf(player);
       const r = race.respawnPose(e, 4);
@@ -1216,12 +1489,60 @@ async function main() {
   }
   function respawnBot(car) {
     const e = race?.entryOf(car);
-    if (!e) { car.resetUpright(); return; }
+    if (!e || race.variant === 'derby') { car.resetUpright(); return; }
     const r = race.respawnPose(e, 6);
     placeCar(car, r.pos, r.yaw);
     car.gear = 1;
   }
 
+
+  // ------------------------------------------------------------ Ausscheiden + Derby
+  // Startplätze im Arena-Ring, Blick zur Mitte
+  function derbySlot(k, n) {
+    const A = game.track.extras.arena, a = (k / n) * Math.PI * 2 + 0.3;
+    return { pos: new THREE.Vector3(A.x + Math.cos(a) * (A.r - 10), 0, A.z + Math.sin(a) * (A.r - 10)), yaw: Math.PI / 2 - a };
+  }
+  // Derby: Totalschaden, aus dem Ring oder abgestürzt = raus. Online meldet jeder nur seine Autos.
+  function checkDerby() {
+    const A = game.track.extras.arena;
+    for (const e of race.alive()) {
+      const c = e.car;
+      if (race.net && (!c.netOwned || e.outSent)) continue;
+      const p = c.body.translation();
+      const ring = Math.hypot(p.x - A.x, p.z - A.z) > A.r + 7 || p.y < -15;
+      if (c.derbyHp > 0 && !ring) continue;
+      if (race.net) { e.outSent = true; mp.net?.send('out', { race: mp.raceInfo?.id, id: e.netId, time: race.time }); }
+      else race.eliminate(e);
+    }
+  }
+  // Ausscheiden: wenn der Führende eine Runde beendet, fliegt der Letzte raus (Gastgeber entscheidet online)
+  function elimLeaderLap() {
+    if (race.net && !isHost()) return;
+    const al = (race.sorted || race.entries).filter((x) => !x.out && !x.finished);
+    if (al.length < 2) return;
+    const last = al[al.length - 1];
+    if (race.net) { if (!last.outSent) { last.outSent = true; mp.net?.send('out', { race: mp.raceInfo?.id, id: last.netId, time: race.time }); } }
+    else race.eliminate(last);
+  }
+  // Wirkung des Ausscheidens am Auto + Meldungen
+  function onOut(e) {
+    const c = e.car;
+    c.out = true;
+    if (race.variant === 'elim') { c.ghostT = 1e6; c.applyGhost?.(); }
+    else { c.engineHp = 0; game.fx.sparks.burst(c.root.position.clone().add(new THREE.Vector3(0, 0.6, 0)), 40, { speed: 7, spread: 1.4 }); }
+    const left = race.alive().length;
+    if (e.isPlayer) {
+      bigMsg(`AUSGESCHIEDEN!<small>Platz ${e.outPlace} von ${race.entries.length}</small>`, 'bad', 3.2);
+      audio?.sfx('powerdown');
+      setTimeout(() => { if (race && race.entryOf(player)?.out) state.spectate = (race.sorted || race.entries).find((x) => !x.out)?.car || null; }, 2500);
+      if (!race.net) resT = setTimeout(showResults, left <= 1 ? 3500 : 6000);
+    } else {
+      toast(`${e.name} ist raus! Noch ${left}`, left <= 2 ? 'gold' : '');
+      audio?.sfx(race.variant === 'derby' ? 'boom' : 'wrong', 0.5);
+    }
+    if (state.spectate === c) state.spectate = (race.sorted || race.entries).find((x) => !x.out)?.car || null;
+    if (state.resultsShown) renderResults();
+  }
   function handleRaceEvents() {
     if (!race) return;
     const inMenu = state.mode === 'menu';
@@ -1256,19 +1577,25 @@ async function main() {
         if (ev.best && (cfg.best[level.level.id] == null || ev.time < cfg.best[level.level.id])) { cfg.best[level.level.id] = ev.time; persist(); toast(`Streckenrekord ${fmt(ev.time)}!`, 'gold'); }
         else toast(`Runde ${fmt(ev.time)}`, ev.best ? 'gold' : '');
         if (state.mode === 'race' && ev.lap < race.laps - 1) audio?.sfx('lap');
+      } else if (ev.type === 'leaderLap' && race.variant === 'elim') {
+        elimLeaderLap();
+      } else if (ev.type === 'out') {
+        onOut(ev.e);
       } else if (ev.type === 'final' && ev.e.isPlayer) {
         bigMsg('LETZTE RUNDE!', '', 1.8);
         audio?.sfx('final');
       } else if (ev.type === 'finish') {
         // Mehrspieler: eigene Autos melden ihren Zieleinlauf dem Server
-        if (race.net && !ev.net && !ev.e.remote) mp.net?.send('fin', { id: ev.e.netId, time: ev.e.finishTime, best: ev.e.bestLap });
-        if (ev.e.isPlayer && !ev.net) {
+        if (race.net && !ev.net && !ev.e.remote && race.variant === 'race') mp.net?.send('fin', { id: ev.e.netId, time: ev.e.finishTime, best: ev.e.bestLap });
+        if (ev.e.isPlayer && (!ev.net || race.variant !== 'race') && !state.resultsShown) {
           const pl = ev.e.finishPlace;
-          bigMsg(`ZIEL!<small>Platz ${pl} von ${race.entries.length}</small>`, '', 3);
+          if (race.variant !== 'race') bigMsg(`SIEG!<small>${race.variant === 'derby' ? 'Als Letzter noch fahrbereit' : 'Alle anderen sind raus'}</small>`, 'gold', 3);
+          else bigMsg(`ZIEL!<small>Platz ${pl} von ${race.entries.length}</small>`, '', 3);
           audio?.sfx('finish');
-          playerAuto = new BotDriver(player, game.track, 'normal', 0.5);
+          playerAuto = race.variant === 'race' ? new BotDriver(player, game.track, 'normal', 0.5) : null;
           resT = setTimeout(showResults, 3200);
-        } else if (ev.net && ev.e.remote && !ev.e.bot) toast(`${ev.e.name} ist im Ziel!`, 'gold');
+        } else if (ev.winner && !ev.e.isPlayer) toast(`${ev.e.name} gewinnt!`, 'gold');
+        else if (ev.net && ev.e.remote && !ev.e.bot) toast(`${ev.e.name} ist im Ziel!`, 'gold');
         if (state.resultsShown) renderResults();
       } else if (ev.type === 'done') {
         if (!state.resultsShown) { clearTimeout(resT); resT = setTimeout(showResults, 600); }
@@ -1297,8 +1624,16 @@ async function main() {
         else if (ev.item === 'rocket') audio?.sfx('rocket');
         else if (ev.item === 'shock') { audio?.sfx('shock'); game.fx.shake = Math.min(1.2, game.fx.shake + 0.5); }
         else if (ev.item === 'armor') audio?.sfx('armor');
+        else if (ev.item === 'smoke') audio?.sfx('smoke');
+        else if (ev.item === 'spikes' || ev.item === 'ramp') audio?.sfx('clank');
+        else if (ev.item === 'ram') audio?.sfx('ram');
+        else if (ev.item === 'magnet') audio?.sfx('magnet');
+        else if (ev.item === 'emp') audio?.sfx('emp');
+        else if (ev.item === 'ghost') audio?.sfx('ghost');
         if (ev.car === player && ev.item !== 'repair') toast(ITEMS[ev.item].name + '!', 'gold');
       } else if (ev.type === 'oil' && ev.car === player) { audio?.sfx('oil'); toast('Öl! Gegenlenken!', 'bad'); }
+      else if (ev.type === 'spiked' && ev.car === player) { audio?.sfx('puncture'); toast('Plattfuß!', 'bad'); }
+      else if (ev.type === 'emp' && ev.car === player) { audio?.sfx('powerdown'); toast('EMP – Motor aus!', 'bad'); }
       else if (ev.type === 'hit' && ev.by === player && ev.car !== player) toast(`Treffer: ${ev.car.name || 'Gegner'}!`, 'good');
       else if (ev.type === 'hit' && ev.car === player && ev.by && ev.by !== player) toast(`Erwischt von ${ev.by.name || 'Gegner'}!`, 'bad');
     }
@@ -1321,11 +1656,11 @@ async function main() {
     const place = me ? me.place : 0;
     $('resPlace').textContent = place + '.';
     $('resTitle').textContent = place === 1 ? 'SIEG!' : place <= 3 ? 'PODIUM!' : place <= res.length / 2 ? 'STARK GEFAHREN!' : 'NÄCHSTES MAL!';
-    $('resSub').textContent = `${LEVELS[level.level.id].name} · ${race.laps} ${race.laps === 1 ? 'Runde' : 'Runden'} · ${res.length} Fahrer`;
+    $('resSub').textContent = race.variant === 'derby' ? `Derby-Arena · Last Man Standing · ${res.length} Fahrer` : race.variant === 'elim' ? `${LEVELS[level.level.id].name} · Ausscheiden · ${res.length} Fahrer` : `${LEVELS[level.level.id].name} · ${race.laps} ${race.laps === 1 ? 'Runde' : 'Runden'} · ${res.length} Fahrer`;
     $('resHead').querySelector('.trophy').style.visibility = place <= 3 ? 'visible' : 'hidden';
     const lead = res[0]?.time || 0;
     $('resTable').innerHTML = `<div class="h"><span>Platz</span><span>Fahrer</span><span>Auto</span><span>Zeit</span><span>Beste Runde</span></div>` +
-      res.map((r, k) => `<div class="${r.isPlayer ? 'me' : ''}"><em>${r.place}</em><span class="nm"><i style="background:${r.color}"></i>${escapeHtml(r.name)}</span><span>${r.car}</span><span class="t">${k === 0 ? fmt(r.time) : (r.est ? '≈ ' : '') + '+' + (r.time - lead).toFixed(1) + ' s'}</span><span class="t">${fmt(r.best)}</span></div>`).join('');
+      res.map((r, k) => `<div class="${r.isPlayer ? 'me' : ''}"><em>${r.place}</em><span class="nm"><i style="background:${r.color}"></i>${escapeHtml(r.name)}</span><span>${r.car}</span><span class="t">${race.variant !== 'race' ? (r.out ? 'raus nach ' + fmt(r.time) : r.fin ? 'Sieger' : 'fährt noch') : k === 0 ? fmt(r.time) : (r.est ? '≈ ' : '') + '+' + (r.time - lead).toFixed(1) + ' s'}</span><span class="t">${fmt(r.best)}</span></div>`).join('');
   }
 
   // ------------------------------------------------------------ Mehrspieler
@@ -1342,7 +1677,7 @@ async function main() {
     if (mp.net?.connected) { net.close(); return true; } // zwischenzeitlich doppelt geklickt
     mp.net = net; mp.me = net.id; mp.online = true; mp.room = null;
     net.on('room', onRoom).on('error', onNetError).on('load', (m) => startNetRace(m.race)).on('countdown', onCountdown).on('wait', onWait)
-      .on('s', onStates).on('ev', onNetEvent).on('fin', onNetFinish).on('end', onNetEnd).on('left', onLeft).on('close', onNetClose);
+      .on('s', onStates).on('ev', onNetEvent).on('fin', onNetFinish).on('out', onNetOut).on('end', onNetEnd).on('left', onLeft).on('close', onNetClose);
     return true;
   }
   function netLeave() {
@@ -1383,6 +1718,7 @@ async function main() {
   async function startNetRace(info) {
     mp.raceInfo = info; mp.inRace = true; mp.ended = false; mp.goAt = null; mp.warmed = false; mp.waitMsg = '';
     state.lastRace = null;
+    state.classLimit = info.cls || 'open';
     clearTimeout(resT);
     showScreen('hud');
     $('hud').classList.add('hidden');
@@ -1393,25 +1729,29 @@ async function main() {
     clearCars(); removeRam();
     while (game.debris.length) removeDebris(game.debris.shift());
     items?.dispose();
-    items = new Items(game, game.track, { enabled: info.items });
+    const variant = info.mode === 'elim' || info.mode === 'derby' ? info.mode : 'race', derby = variant === 'derby', A = game.track.extras.arena;
+    const rmode = info.mode === 'free' ? 'free' : 'race';
+    items = new Items(game, game.track, { enabled: info.items, arena: derby ? A : null });
     items.owned = (c) => !!c.netOwned;
     items.emit = (e) => mp.net?.send('ev', { e });
     props.reset();
     game.fx.skids.clear();
     const tr = game.track;
-    race = new Race(tr, { laps: info.laps, mode: info.mode });
+    race = new Race(tr, { laps: info.laps, mode: rmode, variant });
     race.net = true;
+    state.variant = variant; game.derby = derby;
     for (const g of info.grid) {
-      const slot = gridSlot(tr, g.slot);
+      const slot = derby ? derbySlot(g.slot, info.grid.length) : gridSlot(tr, g.slot);
       const mine = g.owner === mp.me;
       let car, driver = null;
-      if (mine && !g.bot) { player = makeCar(g.car, g.color, { isPlayer: true, name: g.name }); car = player; }
+      const gr = restrictFor(CARS[g.car] || CARS.brutus, g.tune, info.cls || 'open');
+      if (mine && !g.bot) { player = makeCar(g.car, g.color, { isPlayer: true, name: g.name, tune: g.tune, restrict: gr }); car = player; }
       else if (mine) {
-        car = makeCar(g.car, g.color, { ai: true, name: g.name });
-        driver = new BotDriver(car, tr, info.skill, Math.random());
+        car = makeCar(g.car, g.color, { ai: true, name: g.name, tune: g.tune, restrict: gr });
+        driver = derby ? new DerbyDriver(car, A, info.skill, Math.random()) : new BotDriver(car, tr, info.skill, Math.random());
         bots.push({ car, driver, name: g.name });
       } else {
-        car = makeCar(g.car, g.color, { remote: true, name: g.name });
+        car = makeCar(g.car, g.color, { remote: true, name: g.name, tune: g.tune, restrict: gr });
         car.setNameTag(g.name, g.color);
         mp.ghosts.set(g.id, { car, snaps: [], offset: null, owner: g.owner, bot: g.bot, pose: null });
       }
@@ -1423,7 +1763,7 @@ async function main() {
     }
     if (player && audio) { audio.disposeEngine?.(); attachSound(true); }
     damageView.lastBody = 100;
-    setMode(info.mode);
+    setMode(rmode);
     $('itemSlot').classList.toggle('hidden', !items.enabled);
     race.start(999); // alle stehen, bis der Server die Ampel freigibt
     state.intro = null;
@@ -1523,12 +1863,25 @@ async function main() {
     } else if (e.type === 'rep') {
       const g = mp.ghosts.get(e.id);
       if (g) rebuildCar(g.car);
+    } else if (e.type === 'horn') {
+      const car = carByNet(e.id);
+      if (!car) return;
+      if (e.on) { const d = camera.position.distanceTo(car.root.position); audio?.hornStart(e.id, typeof e.h === 'string' ? e.h : 'classic', 1 / (1 + d / 35)); }
+      else audio?.hornStop(e.id);
     } else items?.remote(e, carByNet);
   }
   function onNetFinish(m) {
     if (!race) return;
     const e = race.entries.find((x) => x.netId === m.id);
+    if (m.out) { onNetOut(m); return; }
+    if (m.winner && e && !e.finished) { race.crown(e, 1); return; }
     race.netFinish(e, m.time, m.best, m.place);
+  }
+  // Ausscheiden/Derby online: der Server bestätigt, wer raus ist
+  function onNetOut(m) {
+    if (!race) return;
+    const e = race.entries.find((x) => x.netId === m.id);
+    if (e && !e.out) { if (Number.isFinite(m.time)) race.time = Math.max(race.time, 0); race.eliminate(e, m.place); }
   }
   function onNetEnd(m) {
     if (!race || !mp.inRace) return;
@@ -1608,7 +1961,8 @@ async function main() {
       const e = race.entryOf(player);
       if (e) {
         const lapNo = clamp(e.lap + 1, 1, race.laps);
-        $('lapPill').textContent = isRace ? `RUNDE ${lapNo}/${race.laps}` : `RUNDE ${Math.max(1, e.lap + 1)}`;
+        const alive = race.alive().length;
+        $('lapPill').textContent = race.variant === 'derby' ? `NOCH ${alive} AUTOS` : race.variant === 'elim' ? `RUNDE ${Math.max(1, race.leaderLap + 1)} · NOCH ${alive}` : isRace ? `RUNDE ${lapNo}/${race.laps}` : `RUNDE ${Math.max(1, e.lap + 1)}`;
         $('posBig').textContent = e.place + '.';
         $('posOf').textContent = '/ ' + race.entries.length;
         const tNow = race.phase === 'countdown' ? 0 : e.finished ? e.finishTime : race.time;
@@ -1622,7 +1976,12 @@ async function main() {
       standT -= dt;
       if (isRace && standT <= 0) {
         standT = 0.25;
-        $('standings').innerHTML = (race.sorted || race.entries).map((o) => `<div class="${o.isPlayer ? 'me' : ''}"><em>${o.place}</em><i style="background:${o.color}"></i><span>${escapeHtml(o.name)}</span><small>${o.finished ? '🏁' : ''}</small></div>`).join('');
+        const list = race.sorted || race.entries, lastAlive = list.filter((o) => !o.out).pop();
+        $('standings').innerHTML = list.map((o) => {
+          const hp = race.variant === 'derby' && !o.out ? `<b class="hpb"><b style="width:${Math.round(clamp(o.car.derbyHp, 0, 100))}%"></b></b>` : '';
+          const tag = o.out ? '✖' : o.finished ? (race.variant === 'race' ? '🏁' : '🏆') : race.variant === 'elim' && o === lastAlive && race.alive().length > 1 ? '⚠' : '';
+          return `<div class="${o.isPlayer ? 'me' : ''} ${o.out ? 'out' : ''} ${tag === '⚠' ? 'danger' : ''}"><em>${o.place}</em><i style="background:${o.color}"></i><span>${escapeHtml(o.name)}</span>${hp}<small>${tag}</small></div>`;
+        }).join('');
       }
       drawMinimap();
       // Power-up-Feld
@@ -1699,6 +2058,12 @@ async function main() {
     look.y = p.y - 0.55;
   }
   function updateCamera(dt) {
+    if (state.camOverride) { // nur für Vorschaubilder/Tests
+      const o = state.camOverride;
+      camera.position.set(...o.pos); camera.lookAt(...o.look);
+      if (o.fov) { camera.fov = o.fov; camera.updateProjectionMatrix(); }
+      return;
+    }
     let fovT = 60;
     if (state.mode === 'menu' && bots.length) {
       // Kino-Kamera: wechselnde Einstellungen
@@ -1739,7 +2104,7 @@ async function main() {
       camera.lookAt(camLook);
       fovT = 50;
     } else if (player) {
-      const car = player;
+      const car = state.spectate && !state.spectate.disposed ? state.spectate : player;
       if (state.intro && state.intro.t < state.intro.dur + 2.2) {
         // Startaufstellung: von vorne an das Auto heranfliegen
         const I = state.intro;
@@ -1786,15 +2151,16 @@ async function main() {
 
   // ------------------------------------------------------------ Hauptschleife
   let acc = 0, hudT = 0, rivalT = 0;
-  const botCtx = { cars: [], myProg: 0, running: false, rubber: 1, water: null, respawn: respawnBot, useItem: null };
+  const botCtx = { cars: [], myProg: 0, running: false, rubber: 1, water: null, respawn: respawnBot, useItem: null, smoke: (p) => items?.smokeAt(p) || 0 };
   function frame() {
     requestAnimationFrame(frame);
     const rdt = Math.min(clock.getDelta(), 0.05);
     const now = clock.elapsedTime;
     readInput(rdt);
 
+    if (state.screen === 'tuning') { updateTuning(rdt); composer.render(); return; }
     if (state.screen === 'garage') {
-      turntable.rotation.y += rdt * 0.32;
+      if (!tuneUi.drag) turntable.rotation.y += rdt * 0.32;
       if (slide) {
         slide.t = Math.min(1, slide.t + rdt / 0.6);
         const e = easeInOut(slide.t);
@@ -1815,6 +2181,7 @@ async function main() {
       // Eingaben
       if (player) {
         if (playerAuto) { /* nach dem Ziel fährt der Bot */ }
+        else if (race?.entryOf(player)?.out) Object.assign(player.input, { throttle: 0, brake: 1, steer: 0, handbrake: 1 });
         else if (driving()) Object.assign(player.input, ctl);
         else Object.assign(player.input, { throttle: 0, brake: 0, steer: 0, handbrake: 1 });
         if (state.mode === 'race' && race?.phase === 'countdown') Object.assign(player.input, { throttle: ctl.throttle, brake: 0, steer: 0, handbrake: 0 });
@@ -1825,12 +2192,14 @@ async function main() {
         if (race.net && race.phase === 'countdown' && mp.goAt != null) race.cd = 3 - (mp.goAt - performance.now()) / 1000 - dt;
         race.update(dt);
         const N = game.track.N;
-        botCtx.cars = race.entries.map((o) => ({ car: o.car, prog: race.progressM(o) }));
+        botCtx.cars = race.entries.map((o) => ({ car: o.car, prog: race.progressM(o), out: !!o.out }));
+        if (race.variant === 'derby' && race.phase === 'running') checkDerby();
         botCtx.running = race.phase === 'running' || race.phase === 'done';
         botCtx.water = game.waterLevel ?? null;
         const pe = race.entryOf(player);
         for (const e of race.entries) {
           const drv = e.isPlayer ? playerAuto : e.bot;
+          if (e.out && !e.car.remote) { Object.assign(e.car.input, { throttle: 0, brake: 1, steer: 0, handbrake: 1 }); continue; }
           if (!drv) continue;
           botCtx.myProg = race.progressM(e);
           botCtx.rubber = 1;
@@ -1841,7 +2210,8 @@ async function main() {
           botCtx.rev = race.phase === 'countdown' && Math.random() < 0.3 ? Math.random() : 0;
           botCtx.useItem = (c) => {
             const ahead = race.sorted ? race.sorted.find((o) => o.place === e.place - 1)?.car : null;
-            items?.use(c, ahead || null);
+            const aheadAll = race.sorted ? race.sorted.filter((o) => o.place < e.place).map((o) => o.car) : [];
+            items?.use(c, ahead || null, aheadAll);
           };
           drv.update(dt, botCtx);
           if (e.isPlayer && (player.flipTimer > 1.5)) resetPlayer();
@@ -1945,6 +2315,11 @@ async function main() {
     if (hudT <= 0 && !inMenu) { hudT = 1 / 30; updateHud(1 / 30); }
 
     updateCamera(rdt);
+    {
+      const dn = items && driving() ? Math.min(1, items.smokeAt(camera.position) * 1.3) : 0;
+      state.veil = (state.veil || 0) + (dn - (state.veil || 0)) * Math.min(1, rdt * 6);
+      $('smokeVeil').style.opacity = state.veil > 0.01 ? state.veil.toFixed(3) : '0';
+    }
     const focus = player ? player.root.position : camLook;
     sun.target.position.copy(focus);
     sun.position.copy(focus).addScaledVector(game.sunDir, 220);
@@ -1972,7 +2347,8 @@ async function main() {
     game, get player() { return player; }, get audio() { return audio; }, get race() { return race; }, get items() { return items; }, state, lab, sp, lobby,
     fireRam, startRace, startLab, startArena, goMenu, switchCar, openSp, openMp, createRoom, openGarage, openInfo, openSettings, showResults, keys, ctl, setPause,
     bots: () => bots, setSlowmo, useItem, mp,
-    autopilot: (skill = 'profi') => { playerAuto = new BotDriver(player, game.track, skill, 0.3); },
+    autopilot: (skill = 'profi') => { playerAuto = race?.variant === 'derby' ? new DerbyDriver(player, game.track.extras.arena, skill, 0.3) : new BotDriver(player, game.track, skill, 0.3); },
+    openTuning, closeTuning, setTunePart, get tuneUi() { return tuneUi; },
     set simMul(v) { state.simMul = v; },
   };
   requestAnimationFrame(frame);

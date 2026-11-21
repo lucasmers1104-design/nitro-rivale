@@ -314,9 +314,21 @@ export function createFlame() {
   g.userData.layers = [outer, mid, core];
   return g;
 }
-export function updateFlame(g, intensity, time) {
+// Nitro-Strahl: dieselbe Flamme, aber kalt-blau (Fehlzündungen bleiben orange)
+const FLAME_BLUE = [[0x58c4ff, 0x1c64ff, 0x0a1a90], [0xe0f6ff, 0x62b8ff, 0x2a66ff], [0xffffff, 0xa8dcff, 0x6a90ff]];
+const _ca = new THREE.Color(), _cb = new THREE.Color();
+export function updateFlame(g, intensity, time, blue = 0) {
   g.visible = intensity > 0.03;
   if (!g.visible) return;
+  if (g.userData.blue !== blue) {
+    g.userData.blue = blue;
+    g.userData.layers.forEach((l, i) => {
+      const u = l.material.uniforms;
+      if (!l.userData.base) l.userData.base = [u.uA.value.clone(), u.uB.value.clone(), u.uC.value.clone()];
+      const base = l.userData.base;
+      ['uA', 'uB', 'uC'].forEach((k, j) => u[k].value.copy(base[j]).lerp(_ca.setHex(FLAME_BLUE[i][j]), blue));
+    });
+  }
   const flick = 0.85 + Math.random() * 0.3;
   const len = (0.55 + intensity * 1.0) * flick;
   const wid = 0.85 + intensity * 0.45;
@@ -327,7 +339,7 @@ export function updateFlame(g, intensity, time) {
     const sz = (0.3 + intensity * 0.5) * flick;
     glow.scale.set(sz / wid, sz / wid, 1);
     glow.material.opacity = Math.min(0.55, intensity * 0.5);
-    glow.material.color.setRGB(1.0, 0.62, 0.3);
+    glow.material.color.setRGB(1.0, 0.62, 0.3).lerp(_cb.setRGB(0.35, 0.65, 1.0), blue);
   }
 }
 

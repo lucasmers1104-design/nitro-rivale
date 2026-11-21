@@ -317,3 +317,270 @@ export class BlastFx {
   }
   dispose() { this.clear(); this.crackTex.dispose(); this.scorchTex.dispose(); this.domeGeo.dispose(); }
 }
+
+// =========================================================================
+// v8: Modelle und Effekte der neuen Power-ups
+// =========================================================================
+const flat = (o) => new THREE.MeshStandardMaterial({ flatShading: true, roughness: 0.6, metalness: 0.1, ...o });
+
+// Gelb-schwarze Warnstreifen (für Nagelband und Rampe)
+function stripeTexture(rep = 6, chevron = false) {
+  const [cv, x] = canvas(256, 64);
+  if (x) {
+    x.fillStyle = '#1d1f26'; x.fillRect(0, 0, 256, 64);
+    x.fillStyle = '#ffc21a';
+    const w = 256 / rep;
+    for (let k = -1; k <= rep; k++) {
+      x.beginPath();
+      if (chevron) { x.moveTo(k * w, 0); x.lineTo(k * w + w * 0.5, 32); x.lineTo(k * w, 64); x.lineTo(k * w + w * 0.45, 64); x.lineTo(k * w + w * 0.95, 32); x.lineTo(k * w + w * 0.45, 0); }
+      else { x.moveTo(k * w, 64); x.lineTo(k * w + w * 0.5, 64); x.lineTo(k * w + w, 0); x.lineTo(k * w + w * 0.5, 0); }
+      x.closePath(); x.fill();
+    }
+  }
+  const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = THREE.RepeatWrapping;
+  return t;
+}
+
+// ---------- Nagelband: fünf Scharnier-Glieder mit Stahldornen, quer zur Fahrbahn
+export function buildSpikeStrip(width = 4.4) {
+  const g = new THREE.Group();
+  const metal = flat({ color: 0x3a3d46, metalness: 0.6, roughness: 0.45 });
+  const chrome = new THREE.MeshStandardMaterial({ color: 0xd9dde6, metalness: 0.95, roughness: 0.18, flatShading: true });
+  const stripes = flat({ map: stripeTexture(5), roughness: 0.7 });
+  const red = new THREE.MeshStandardMaterial({ color: 0xff2a1a, emissive: 0xff1a0a, emissiveIntensity: 0.8, flatShading: true });
+  const n = 6, seg = width / n;
+  const spikeGeo = new THREE.ConeGeometry(0.045, 0.2, 4);
+  const spikes = new THREE.InstancedMesh(spikeGeo, chrome, n * 10);
+  let si = 0;
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(1, 1, 1), p = new THREE.Vector3();
+  for (let i = 0; i < n; i++) {
+    const x0 = -width / 2 + seg * (i + 0.5);
+    const zig = (i % 2 ? 1 : -1) * 0.06;                  // Scherengitter leicht versetzt
+    const plate = new THREE.Mesh(new THREE.BoxGeometry(seg * 0.92, 0.06, 0.34), stripes);
+    plate.position.set(x0, 0.03, zig);
+    plate.rotation.y = (i % 2 ? 1 : -1) * 0.12;
+    g.add(plate);
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(seg * 0.92, 0.05, 0.06), metal);
+    rail.position.set(x0, 0.075, zig); rail.rotation.y = plate.rotation.y; g.add(rail);
+    for (let k = 0; k < 5; k++) for (const side of [-1, 1]) {
+      const lx = -seg * 0.38 + (k / 4) * seg * 0.76;
+      p.set(x0 + lx * Math.cos(plate.rotation.y), 0.16, zig + side * 0.1 - lx * Math.sin(plate.rotation.y));
+      q.setFromEuler(new THREE.Euler(side * 0.35, 0, 0));
+      m.compose(p, q, s); spikes.setMatrixAt(si++, m);
+    }
+    if (i < n - 1) {
+      const hinge = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.36, 6), chrome);
+      hinge.rotation.x = Math.PI / 2; hinge.position.set(x0 + seg / 2, 0.05, 0); g.add(hinge);
+    }
+  }
+  spikes.count = si; g.add(spikes);
+  for (const side of [-1, 1]) {
+    const cap = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.12, 0.4), metal);
+    cap.position.set(side * (width / 2 + 0.05), 0.06, 0); g.add(cap);
+    const refl = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.07, 0.24), red);
+    refl.position.set(side * (width / 2 + 0.13), 0.07, 0); g.add(refl);
+  }
+  g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+  return g;
+}
+
+// ---------- Rampe: Stahl-Keil mit Chevron-Belag, Stützen und Kantenschutz
+export const RAMP = { w: 4.4, l: 5.2, h: 1.35 };
+export function rampHull() {
+  const { w, l, h } = RAMP, x = w / 2, z = l / 2;
+  // Auffahrt bei +z (niedrig, zum Verfolger), hohe Kante bei -z (Fahrtrichtung)
+  return new Float32Array([-x, 0, z, x, 0, z, -x, 0, -z, x, 0, -z, -x, h, -z, x, h, -z]);
+}
+export function buildRamp() {
+  const { w, l, h } = RAMP;
+  const g = new THREE.Group();
+  const deckTex = stripeTexture(4, true); deckTex.repeat.set(1, 1); deckTex.rotation = Math.PI / 2; deckTex.center.set(0.5, 0.5);
+  const deck = flat({ map: deckTex, roughness: 0.8 });
+  const steel = flat({ color: 0x4a4f5c, metalness: 0.55, roughness: 0.4 });
+  const dark = flat({ color: 0x23262e, metalness: 0.4, roughness: 0.6 });
+  const edge = flat({ color: 0xffc21a, roughness: 0.5 });
+  // Fahrbahn
+  const len = Math.hypot(l, h), ang = Math.atan2(h, l);
+  const top = new THREE.Mesh(new THREE.BoxGeometry(w, 0.12, len), deck);
+  top.position.set(0, h / 2, 0); top.rotation.x = ang; g.add(top);
+  // Seitenwangen (Dreiecke)
+  for (const side of [-1, 1]) {
+    const sh = new THREE.Shape(); sh.moveTo(-l / 2, 0); sh.lineTo(l / 2, 0); sh.lineTo(-l / 2, h); sh.closePath();
+    const geo = new THREE.ExtrudeGeometry(sh, { depth: 0.12, bevelEnabled: false });
+    const cheek = new THREE.Mesh(geo, steel);
+    cheek.rotation.y = Math.PI / 2; cheek.position.set(side * (w / 2) - (side > 0 ? 0.12 : 0), 0, 0);
+    g.add(cheek);
+    // gelbe Kantenleiste
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.1, len), edge);
+    rail.position.set(side * (w / 2 - 0.02), h / 2 + 0.1, 0); rail.rotation.x = ang; g.add(rail);
+  }
+  // Rückwand + Stützen (von hinten sichtbar)
+  const back = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.12), dark);
+  back.position.set(0, h / 2, -l / 2 + 0.06); g.add(back);
+  for (let k = -1; k <= 1; k++) {
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.16, h * 0.95, 0.16), steel);
+    post.position.set(k * w * 0.36, h * 0.47, -l / 2 + 0.25); g.add(post);
+    const brace = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, l * 0.62), steel);
+    brace.position.set(k * w * 0.36, h * 0.3, -l * 0.12); brace.rotation.x = Math.atan2(h * 0.55, l * 0.62); g.add(brace);
+  }
+  // Abrisskante oben (Stahlwinkel)
+  const lip = new THREE.Mesh(new THREE.BoxGeometry(w + 0.04, 0.14, 0.22), steel);
+  lip.position.set(0, h + 0.03, -l / 2 + 0.11); g.add(lip);
+  // Auffahrtsblech unten
+  const toe = new THREE.Mesh(new THREE.BoxGeometry(w, 0.04, 0.4), steel);
+  toe.position.set(0, 0.02, l / 2 - 0.15); g.add(toe);
+  g.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  return g;
+}
+
+// ---------- Rammbock: glühender Frontbügel aus Stahlrohr
+export function buildRamBar(dims) {
+  const g = new THREE.Group();
+  const w = dims.w;
+  const glow = new THREE.MeshStandardMaterial({ color: 0x3a2a22, metalness: 0.7, roughness: 0.3, emissive: 0xff4a10, emissiveIntensity: 1.5, flatShading: true });
+  const steel = new THREE.MeshStandardMaterial({ color: 0x2b2e36, metalness: 0.8, roughness: 0.35, flatShading: true });
+  const tube = (pts, r, mat) => {
+    const c = new THREE.CatmullRomCurve3(pts.map((p) => new THREE.Vector3(...p)));
+    return new THREE.Mesh(new THREE.TubeGeometry(c, 18, r, 6, false), mat);
+  };
+  const x = w * 0.42;
+  // Hauptbügel (gebogen), zwei Querrohre, Pfosten, Diagonalen
+  g.add(tube([[-x, 0.0, 0], [-x * 0.95, 0.42, -0.06], [-x * 0.6, 0.62, -0.12], [0, 0.66, -0.14], [x * 0.6, 0.62, -0.12], [x * 0.95, 0.42, -0.06], [x, 0.0, 0]], 0.055, glow));
+  g.add(tube([[-x, 0.22, -0.02], [0, 0.26, -0.18], [x, 0.22, -0.02]], 0.05, glow));
+  for (const s of [-1, 1]) {
+    g.add(tube([[s * x * 0.35, 0.0, -0.1], [s * x * 0.35, 0.64, -0.16]], 0.04, steel));
+    g.add(tube([[s * x * 0.35, 0.26, -0.18], [s * x * 0.92, 0.5, -0.07]], 0.035, steel));
+    // Halter zur Karosserie
+    const mount = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.1, 0.32), steel);
+    mount.position.set(s * x * 0.7, 0.1, 0.12); g.add(mount);
+  }
+  // Prallplatte mit Nieten
+  const plate = new THREE.Mesh(new THREE.BoxGeometry(x * 0.7, 0.2, 0.05), steel);
+  plate.position.set(0, 0.04, -0.12); g.add(plate);
+  g.userData.glow = glow;
+  g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+  return g;
+}
+
+// ---------- Leuchtband: gezackter Blitz / Strahl als zur Kamera gedrehtes Band
+function beamTexture() {
+  const [cv, x] = canvas(16, 64);
+  if (x) {
+    const g = x.createLinearGradient(0, 0, 0, 64);
+    g.addColorStop(0, 'rgba(255,255,255,0)'); g.addColorStop(0.35, 'rgba(255,255,255,0.55)'); g.addColorStop(0.5, 'rgba(255,255,255,1)');
+    g.addColorStop(0.65, 'rgba(255,255,255,0.55)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+    x.fillStyle = g; x.fillRect(0, 0, 16, 64);
+  }
+  return new THREE.CanvasTexture(cv);
+}
+let _beamTex = null;
+export class Bolt {
+  constructor(group, color, width = 0.35, segs = 16) {
+    this.n = segs + 1; this.w = width;
+    this.geo = new THREE.BufferGeometry();
+    this.pos = new Float32Array(this.n * 2 * 3);
+    const uv = new Float32Array(this.n * 2 * 2), idx = [];
+    for (let i = 0; i < this.n; i++) { uv.set([i / segs, 0, i / segs, 1], i * 4); if (i < segs) { const a = i * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); } }
+    this.geo.setAttribute('position', new THREE.BufferAttribute(this.pos, 3));
+    this.geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    this.geo.setIndex(idx);
+    _beamTex = _beamTex || beamTexture();
+    this.mesh = new THREE.Mesh(this.geo, new THREE.MeshBasicMaterial({ map: _beamTex, color, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, toneMapped: false }));
+    this.mesh.frustumCulled = false;
+    this.pts = Array.from({ length: this.n }, () => new THREE.Vector3());
+    group.add(this.mesh);
+    this.group = group;
+  }
+  // a → b mit zufälligen Zacken (Mitte am stärksten), cam: Kameraposition
+  set(a, b, cam, jag = 0.6, opacity = 1) {
+    const d = _v.copy(b).sub(a), len = d.length();
+    const side = new THREE.Vector3(-d.z, 0, d.x).normalize(), up = new THREE.Vector3().crossVectors(d, side).normalize();
+    for (let i = 0; i < this.n; i++) {
+      const t = i / (this.n - 1), env = Math.sin(Math.PI * t);
+      this.pts[i].copy(a).addScaledVector(d, t)
+        .addScaledVector(side, (Math.random() - 0.5) * jag * env * Math.min(1, len / 6))
+        .addScaledVector(up, (Math.random() - 0.5) * jag * env * Math.min(1, len / 6));
+    }
+    for (let i = 0; i < this.n; i++) {
+      const p = this.pts[i], q = this.pts[Math.min(this.n - 1, i + 1)], o = this.pts[Math.max(0, i - 1)];
+      const dir = new THREE.Vector3().subVectors(q, o).normalize();
+      const view = new THREE.Vector3().subVectors(cam, p).normalize();
+      const nrm = new THREE.Vector3().crossVectors(dir, view).normalize().multiplyScalar(this.w / 2);
+      this.pos.set([p.x + nrm.x, p.y + nrm.y, p.z + nrm.z, p.x - nrm.x, p.y - nrm.y, p.z - nrm.z], i * 6);
+    }
+    this.geo.attributes.position.needsUpdate = true;
+    this.mesh.material.opacity = opacity;
+    this.mesh.visible = opacity > 0.01;
+  }
+  dispose() { this.group.remove(this.mesh); this.geo.dispose(); this.mesh.material.dispose(); }
+}
+
+// ---------- Nebelwand: eigene, dichte Rauchwolken (nicht der dünne Reifenqualm)
+export class SmokeWall {
+  constructor(group, track) {
+    this.track = track; this.max = 260; this.list = [];
+    // weich schattiert + leicht selbstleuchtend, sonst sehen die Wolken aus wie Felsbrocken
+    const mat = new THREE.MeshLambertMaterial({ color: 0xffffff, emissive: 0x6a6e76, flatShading: false, transparent: true, opacity: 0.8, depthWrite: false });
+    this.mesh = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 2), mat, this.max);
+    this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(this.max * 3), 3);
+    this.mesh.count = 0; this.mesh.frustumCulled = false; this.mesh.renderOrder = 3;
+    group.add(this.mesh); this.group = group;
+    this.emitters = [];
+  }
+  start(car, dur = 2.4) { if (car?.root) this.emitters.push({ car, left: dur, acc: 0 }); }
+  puff(p, v) {
+    if (this.list.length >= this.max) this.list.shift();
+    const g = 0.84 + Math.random() * 0.14;
+    this.list.push({ p: p.clone(), v: v.clone(), age: 0, life: 4.4 + Math.random() * 1.4, s0: 0.9 + Math.random() * 0.5, s1: 3.6 + Math.random() * 2.2, rot: Math.random() * 6, col: g });
+  }
+  // Dichte an einem Punkt (0..1): für Bots und den Sicht-Schleier
+  density(p) {
+    let d = 0;
+    for (const s of this.list) {
+      const r = s.s0 + (s.s1 - s.s0) * Math.min(1, s.age / 1.2);
+      const dx = p.x - s.p.x, dy = p.y - s.p.y, dz = p.z - s.p.z, q = (dx * dx + dy * dy * 1.6 + dz * dz) / (r * r);
+      if (q < 1) d += (1 - q) * 0.45 * Math.min(1, (s.life - s.age) / 1.2);
+      if (d >= 1) return 1;
+    }
+    return d;
+  }
+  update(dt) {
+    for (let k = this.emitters.length - 1; k >= 0; k--) {
+      const e = this.emitters[k];
+      e.left -= dt;
+      if (e.left <= 0 || e.car.disposed) { this.emitters.splice(k, 1); continue; }
+      e.acc += dt * 42;
+      const L = e.car.p.dims.l, lv = e.car.body.linvel();
+      while (e.acc > 1) {
+        e.acc -= 1;
+        _v.set((Math.random() - 0.5) * e.car.p.dims.w * 1.6, 0.4 + Math.random() * 0.6, L / 2 + 0.6 + Math.random() * 1.5);
+        e.car.root.localToWorld(_v);
+        this.puff(_v, new THREE.Vector3(lv.x * 0.15 + (Math.random() - 0.5) * 2.5, 0.4 + Math.random() * 0.6, lv.z * 0.15 + (Math.random() - 0.5) * 2.5));
+      }
+    }
+    let n = 0;
+    for (let k = this.list.length - 1; k >= 0; k--) {
+      const s = this.list[k];
+      s.age += dt;
+      if (s.age > s.life) { this.list.splice(k, 1); continue; }
+      s.v.multiplyScalar(Math.exp(-dt * 1.4));
+      s.p.addScaledVector(s.v, dt);
+      const gy = this.track.heightAt(s.p.x, s.p.z);
+      if (s.p.y < gy + 0.6) s.p.y = gy + 0.6;
+      const grow = s.s0 + (s.s1 - s.s0) * (1 - Math.exp(-s.age * 1.6));
+      const fade = Math.min(1, (s.life - s.age) / 1.4);
+      _s.set(grow, grow * 0.78, grow).multiplyScalar(0.25 + 0.75 * fade);
+      _q.setFromEuler(new THREE.Euler(s.rot, s.rot * 0.7 + s.age * 0.2, 0));
+      _m.compose(s.p, _q, _s);
+      this.mesh.setMatrixAt(n, _m);
+      this.mesh.instanceColor.setXYZ(n, s.col, s.col, s.col * 1.02);
+      n++;
+    }
+    this.mesh.count = n;
+    this.mesh.instanceMatrix.needsUpdate = true;
+    if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
+  }
+  clear() { this.list = []; this.emitters = []; this.mesh.count = 0; }
+  dispose() { this.group.remove(this.mesh); this.mesh.geometry.dispose(); this.mesh.material.dispose(); }
+}

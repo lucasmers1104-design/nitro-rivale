@@ -9,6 +9,7 @@ const { CARS } = await import('./src/presets.js');
 const { Race } = await import('./src/race.js');
 const { BotDriver } = await import('./src/bot.js');
 const { Items } = await import('./src/items.js');
+const { applyTune, randomTune } = await import('./src/tune.js');
 await RAPIER.init();
 const only = process.argv[2];
 const laps = Number(process.argv[3] || 2);
@@ -24,12 +25,13 @@ for (const id of LEVEL_ORDER) {
   const tr = L.track;
   const race = new Race(tr, { laps });
   const items = new Items(g, tr, { enabled: true });
-  const ids = ['brutus', 'kaze', 'rhino'];
+  const ids = ['brutus', 'kaze', 'rhino', 'vipera', 'brummi'];
   const cars = [];
   let respawns = 0, uses = {}, hits = 0;
   for (let k = 0; k < nCars; k++) {
-    const pid = ids[k % 3];
-    const car = new Car(g, CARS[pid], 0xff0000, { ai: true }); car.uid = k + 1;
+    const pid = ids[k % ids.length];
+    const tn = k >= ids.length ? randomTune(CARS[pid], () => ((k * 0.618) % 1)) : null;
+    const car = new Car(g, tn ? applyTune(CARS[pid], tn) : CARS[pid], 0xff0000, { ai: true }); car.uid = k + 1;
     const s = gridSlot(tr, k);
     s.pos.y = tr.heightAt(s.pos.x, s.pos.z) + 1.2;
     car.spawn(s.pos, s.yaw);
@@ -52,7 +54,7 @@ for (const id of LEVEL_ORDER) {
         const prog = race.progressM(e);
         e.bot.update(dt * 2, {
           running: race.phase === 'running', cars: race.entries.map((o) => ({ car: o.car, prog: race.progressM(o) })), myProg: prog,
-          respawn, useItem: (c) => { const it = c.item; const ahead = race.sorted?.find((o) => o.place === e.place - 1)?.car || null; if (items.use(c, ahead)) uses[it] = (uses[it] || 0) + 1; }, water: null,
+          respawn, useItem: (c) => { const it = c.item; const ahead = race.sorted?.find((o) => o.place === e.place - 1)?.car || null; const aheadAll = race.sorted ? race.sorted.filter((o) => o.place < e.place).map((o) => o.car) : []; if (items.use(c, ahead, aheadAll)) uses[it] = (uses[it] || 0) + 1; }, water: null,
         });
       }
       items.update(dt * 2, race.entries.map((e) => ({ car: e.car, rankFrac: (e.place - 1) / Math.max(1, race.entries.length - 1), isPlayer: false })));
