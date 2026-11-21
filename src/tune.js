@@ -12,8 +12,8 @@ export const PARTS = {
     label: 'Aerodynamik', icon: 'wing', focus: 'rear',
     levels: [
       { name: 'Serie', desc: 'Werksaerodynamik ohne Zusatzteile.' },
-      { name: 'Abrisskante', desc: 'Carbon-Abrisskante auf Stelzen. Etwas mehr Anpressdruck, kaum Luftwiderstand.' },
-      { name: 'GT-Flügel', desc: 'Verstellbarer Flügel mit Endplatten. Deutlich mehr Grip in schnellen Kurven.' },
+      { name: 'Abrisskante', desc: 'Abrisskante in Wagenfarbe auf drei Stelzen. Etwas mehr Anpressdruck, kaum Luftwiderstand.' },
+      { name: 'GT-Flügel', desc: 'Carbon-Flügel mit Endplatten und Frontsplitter. Deutlich mehr Grip in schnellen Kurven.' },
       { name: 'Race-Doppelflügel', desc: 'Schwanenhals-Doppeldecker mit Gurney-Kante und Splitter. Maximaler Abtrieb, kostet Topspeed.' },
     ],
   },
@@ -41,7 +41,7 @@ export const PARTS = {
       { name: 'Keine', desc: 'Serienkarosserie.' },
       { name: 'Stufe 1 · Stahlschweller', desc: 'Unterfahrschutz und Stahlschweller. +30 % Haltbarkeit, etwas schwerer.' },
       { name: 'Stufe 2 · Platten + Gitter', desc: 'Genietete Türplatten und Scheibengitter. +60 % Haltbarkeit.' },
-      { name: 'Stufe 3 · Kampfwagen', desc: 'Überrollkäfig, Rammplatte vorn, Kotflügel-Panzer. +90 % Haltbarkeit, deutlich schwerer.' },
+      { name: 'Stufe 3 · Kampfwagen', desc: 'Überrollkäfig, Rammplatte, Scheinwerfergitter und Dorne an den Naben. +90 % Haltbarkeit, deutlich schwerer.' },
     ],
   },
 };
